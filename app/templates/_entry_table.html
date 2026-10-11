@@ -1,0 +1,26 @@
+{% from "macros.html" import render_cell %}
+<div class="entry-list" id="list-{{ section.key }}" data-section="{{ section.key }}">
+  <div class="table-summary"><span class="muted">共 {{ entries | length }} 条记录</span>{% if entries %}<span class="muted">使用箭头调整顺序</span>{% endif %}</div>
+  {% if entries %}
+  {% set table_fields = section.fields | selectattr('key', 'in', ('year', 'journal', 'title', 'rank', 'authorship', 'cas_quartile', 'jcr_quartile')) | list if section.key == 'papers' else section.fields %}
+  <div class="table-wrap" tabindex="0" role="region" aria-label="{{ section.label }}记录，可横向滚动">
+    <table class="entry-table{% if section.key == 'papers' %} papers-table{% endif %}">
+      <thead><tr><th scope="col" class="record-position">序号</th>{% for field in table_fields %}<th scope="col"{% if section.key == 'papers' %} data-field="{{ field.key }}"{% endif %}>{{ field.label }}</th>{% endfor %}<th scope="col" class="record-actions">操作</th></tr></thead>
+      <tbody>
+        {% for row in entries %}
+        <tr data-id="{{ row.id }}">
+          <td class="record-position">{{ loop.index }}</td>
+          {% for field in table_fields %}{{ render_cell(field, row, section.key, profile=basic) }}{% endfor %}
+          <td class="record-actions"><div class="entry-actions">
+            <button type="button" class="btn-edit" aria-label="修改{{ section.label }}第 {{ loop.index }} 条">修改</button>
+            <button type="button" class="btn-delete danger" aria-label="删除{{ section.label }}第 {{ loop.index }} 条">删除</button>
+            <button type="button" class="btn-move" data-direction="-1" aria-label="上移{{ section.label }}第 {{ loop.index }} 条" title="上移"{% if loop.first %} disabled{% endif %}>↑</button>
+            <button type="button" class="btn-move" data-direction="1" aria-label="下移{{ section.label }}第 {{ loop.index }} 条" title="下移"{% if loop.last %} disabled{% endif %}>↓</button>
+          </div></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}<p class="empty">暂无记录，点击下方按钮新增。</p>{% endif %}
+</div>

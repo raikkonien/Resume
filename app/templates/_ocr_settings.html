@@ -1,0 +1,22 @@
+<form id="ocr-settings-form" data-url="/admin/ocr/settings">
+  <p class="notice">使用支持图像（vision）输入的模型。文件将发送至下方配置的接口；无需鉴权的服务可将 API Key 留空，设置保存在服务器。</p>
+  <div class="fields">
+    <div class="field field-wide">
+      <label for="ocr-endpoint">接口地址</label>
+      <input id="ocr-endpoint" name="endpoint" type="text" inputmode="url" autocomplete="off" value="{{ ocr_settings.endpoint }}" required>
+      <small>OpenAI 兼容的 Chat Completions 接口，形如 http(s)://host:port/v1/chat/completions。</small>
+    </div>
+    <div class="field">
+      <label for="ocr-model">模型名称</label>
+      <input id="ocr-model" name="model" type="text" autocomplete="off" value="{{ ocr_settings.model }}" required>
+    </div>
+    <div class="field">
+      <label for="ocr-api-key">API Key（可选）</label>
+      <input id="ocr-api-key" name="api_key" type="password" autocomplete="off" placeholder="{{ '留空则保留已保存的 Key' if ocr_settings.has_api_key else '留空则不设置 Key' }}">
+      <small class="ocr-key-hint">{{ '已保存 Key，出于安全不会回显明文，如需更换请直接输入新值。' if ocr_settings.has_api_key else '尚未设置 Key，可留空使用无鉴权接口。' }}</small>
+      <label class="file-remove ocr-key-clear"{% if not ocr_settings.has_api_key %} hidden{% endif %}><input type="checkbox" name="clear_api_key" value="1">保存时清除已保存的 Key</label>
+    </div>
+  </div>
+  <p class="panel-status" role="status" aria-live="polite">当前设置已载入；保存前请先测试。</p>
+  <div class="form-footer"><span class="muted">测试通过后方可保存；修改地址、模型或 Key 后需重新测试。</span><div class="entry-actions"><button type="button" class="btn-test-ocr">测试连接</button><button type="submit" class="primary" disabled>保存设置</button></div></div>
+</form>

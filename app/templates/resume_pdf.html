@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  body { font-family: sans-serif; font-size: 10pt; line-height: 1.5; color: #202f2b; margin: 0; }
+  h1 { font-size: 26pt; margin: 0 0 8pt; color: #275443; }
+  h2 { font-size: 14pt; color: #275443; border-bottom: 1pt solid #b9c9bd; padding-bottom: 6pt; margin: 12pt 0 10pt; }
+  h3 { font-size: 11pt; background-color: #e9efe7; padding: 5pt 8pt; margin: 6pt 0; }
+  p { margin: 0 0 4pt; }
+  .subtitle, .label, .empty { color: #606e67; }
+  .masthead { width: 100%; border-collapse: collapse; margin-bottom: 10pt; }
+  .masthead td { vertical-align: middle; padding: 0; }
+  .masthead .portrait { width: 105pt; text-align: right; }
+</style>
+</head>
+<body>
+{% if basic_block %}
+<table class="masthead"><tr><td>
+<h1>{{ pdf_text(basic.name or '个人简历') }}</h1>
+<p class="subtitle">个人简历{% if basic.title %} · {{ pdf_text(basic.title) }}{% endif %}{% if basic.employer %}<br>{{ pdf_text(basic.employer) }}{% endif %}</p>
+</td>{% if portrait %}<td class="portrait"><img src="portrait.png" width="{{ portrait.width }}" height="{{ portrait.height }}" alt="个人照片"></td>{% endif %}</tr></table>
+<h2 id="section-basic">{{ basic_section.label }}</h2>
+{% for field in basic_section.fields %}{% if field.type != 'file' %}
+<p><span class="label">{{ field.label }}：</span>{{ pdf_text(format_value(field, basic)) }}</p>
+{% endif %}{% endfor %}
+{% else %}
+{% if first %}<h2 id="section-{{ section.key }}">{{ section.label }}</h2>{% endif %}
+{% if row is not none %}
+<h3>{{ '%02d' | format(position) }} · {{ section.label }}</h3>
+{% for field in section.fields %}
+<p><span class="label">{{ field.label }}：</span>{% if field.type == 'file' %}{{ pdf_text(row.get(field.key ~ '_name') or '—') }}{% else %}{{ pdf_text(format_value(field, row)) }}{% endif %}</p>
+{% endfor %}
+{% else %}<p class="empty">暂无记录</p>{% endif %}
+{% endif %}
+</body>
+</html>

@@ -1,0 +1,31 @@
+data/
+.env
+__pycache__/
+.venv/
+.mcp.json
+
+# Local secrets and runtime state
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Python build and test output
+.pytest_cache/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+
+# Container exports
+*.tar
+*.tar.*
+*.tgz
+*.oci
+*.oci.tar
+
+# Private local planning notes
+task_plan.md
+findings.md
+progress.md

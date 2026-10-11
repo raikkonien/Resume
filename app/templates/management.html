@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}系统管理 · 个人简历{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', path='admin.js') }}?v={{ asset_versions['admin.js'] }}" defer></script>{% endblock %}
+{% block nav %}<form method="post" action="/logout"><button class="quiet" type="submit">退出</button></form>{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">SYSTEM ADMINISTRATION</p><h1>系统管理</h1></div><p class="muted">管理登录账号与全局 OCR 服务。<br>个人资料由各用户登录自己的账号维护。</p></div>
+{% if error %}<p class="notice error" role="alert">{{ error }}</p>{% elif saved %}<p class="notice" role="status">账号变更已保存。</p>{% endif %}
+<div class="admin-layout">
+  <div class="tabs" role="tablist" aria-label="管理项目" aria-orientation="vertical">
+    <button type="button" class="tab active" role="tab" id="tab-button-users" aria-controls="tab-users" aria-selected="true" tabindex="0" data-target="users"><span class="tab-index">01</span><span>用户管理</span></button>
+    <button type="button" class="tab" role="tab" id="tab-button-ocr-settings" aria-controls="tab-ocr-settings" aria-selected="false" tabindex="-1" data-target="ocr-settings"><span class="tab-index">02</span><span>OCR模型设置</span></button>
+  </div>
+  <div class="panels">
+    <section id="tab-users" class="tab-panel active" role="tabpanel" aria-labelledby="tab-button-users">
+      <div class="panel-heading"><h2>用户管理</h2><span class="muted">{{ users | length }} 个账号</span></div>
+      <form class="account-card" method="post" action="/admin/users">
+        <h3>创建个人账号</h3>
+        <p class="muted" id="username-help">用户名为 3–32 位小写英文字母、数字、下划线或连字符，须以字母开头。密码为 8–256 位。</p>
+        <div class="fields">
+          <div class="field"><label for="new-username">用户名</label><input id="new-username" name="username" autocomplete="off" autocapitalize="none" spellcheck="false" pattern="[a-z][a-z0-9_\-]{2,31}" minlength="3" maxlength="32" aria-describedby="username-help" required></div>
+          <div class="field"><label for="new-password">初始密码</label><input id="new-password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="256" required></div>
+        </div>
+        <div class="form-footer"><span class="muted">创建后获得独立、空白的个人档案。</span><button type="submit" class="primary">创建账号</button></div>
+      </form>
+      {% for user in users %}
+      <article class="account-card" aria-labelledby="account-heading-{{ user.id }}">
+        <h3 id="account-heading-{{ user.id }}">{{ user.username }} <span class="muted">{{ '管理员' if user.role == 'admin' else '个人账号' }}</span></h3>
+        <form method="post" action="/admin/users/{{ user.id }}/edit">
+          <div class="fields">
+            <div class="field"><label for="username-{{ user.id }}">用户名</label><input id="username-{{ user.id }}" name="username" value="{{ user.username }}" autocomplete="off" autocapitalize="none" spellcheck="false" pattern="[a-z][a-z0-9_\-]{2,31}" minlength="3" maxlength="32" required{% if user.role == 'admin' %} readonly aria-describedby="admin-account-help"{% endif %}></div>
+            <div class="field"><label for="password-{{ user.id }}">新密码（留空则不修改）</label><input id="password-{{ user.id }}" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="256"></div>
+          </div>
+          <div class="form-footer"><span class="muted">改名或重设密码会使此账号已有登录失效。</span><button type="submit">保存账号</button></div>
+        </form>
+        {% if user.role == 'admin' %}
+        <p class="muted" id="admin-account-help">固定管理员不能改名或删除；修改自己的密码后需重新登录。</p>
+        {% else %}
+        <details class="account-delete">
+          <summary>删除 {{ user.username }} 的账号与全部资料</summary>
+          <form method="post" action="/admin/users/{{ user.id }}/delete">
+            <p class="error" id="delete-help-{{ user.id }}">此操作会删除该用户的全部简历记录及附件，无法撤销。请输入用户名 {{ user.username }} 确认。</p>
+            <label for="confirm-{{ user.id }}">确认要删除的用户名</label>
+            <input id="confirm-{{ user.id }}" name="confirm_username" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="delete-help-{{ user.id }}" required>
+            <button type="submit" class="danger">确认永久删除</button>
+          </form>
+        </details>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </section>
+    <section id="tab-ocr-settings" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-ocr-settings">
+      <div class="panel-heading"><h2>OCR模型设置</h2><span class="muted">所有个人账号共用</span></div>
+      {% include "_ocr_settings.html" %}
+    </section>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,12 @@
+{% from "macros.html" import render_field %}
+{% if error %}<p class="notice error" role="alert">{{ error }}</p>{% elif saved %}<p class="notice" role="status">已保存</p>{% endif %}
+<form id="basic-form" method="post" action="/admin/basic" enctype="multipart/form-data">
+  <div class="fields">{% for f in basic_section.fields %}{% if f.type != 'file' %}{{ render_field(f, basic, 'basic', basic.id) }}{% endif %}{% endfor %}</div>
+  <div class="photo-editor">
+    {% if basic.photo %}<img src="/files/basic/{{ basic.id }}/photo" class="photo-preview" alt="个人照片">{% endif %}
+    <div>{{ render_field(basic_section.fields[-1], basic, 'basic', basic.id) }}
+    {% if basic.photo %}<button type="submit" form="delete-photo-form" class="danger">删除照片</button>{% endif %}</div>
+  </div>
+  <div class="form-footer"><span class="muted">修改完成后请点击保存。</span><button type="submit" class="primary">保存</button></div>
+</form>
+<form id="delete-photo-form" method="post" action="/admin/basic/photo/delete"></form>

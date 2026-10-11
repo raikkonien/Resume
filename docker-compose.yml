@@ -1,0 +1,18 @@
+services:
+  resume:
+    image: ${IMAGE:-ghcr.io/raikkonien/resume:latest}
+    container_name: resume
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${PORT:-18081}:8000"
+    volumes:
+      - "${DATA_PATH:-./data}:/data"
+    environment:
+      DATA_DIR: /data
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:18081}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      MCP_TOKEN: ${MCP_TOKEN:-}
+      SECRET_KEY: ${SECRET_KEY:-}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-localhost:*,127.0.0.1:*,[::1]:*}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-20}
+    restart: "no"

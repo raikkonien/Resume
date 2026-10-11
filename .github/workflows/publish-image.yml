@@ -1,0 +1,220 @@
+name: Publish container image
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Smoke test native image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Prepare source-only build context
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/resume-build"
+          git archive "$GITHUB_SHA" Dockerfile .dockerignore requirements.txt requirements.lock app \
+            | tar -x -C "$RUNNER_TEMP/resume-build"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build native smoke image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ runner.temp }}/resume-build
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: resume:smoke
+
+      - name: Test fresh bootstrap and persistent login
+        id: smoke
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import http.cookiejar
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          image = "resume:smoke"
+          container = "resume-image-smoke"
+          data = Path(os.environ["RUNNER_TEMP"]) / "resume-smoke-data"
+          data.mkdir(mode=0o700)
+          cookies = http.cookiejar.CookieJar()
+          client = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookies))
+
+          def docker(*args):
+              return subprocess.check_output(
+                  ["docker", *args], text=True, stderr=subprocess.STDOUT
+              ).strip()
+
+          def start():
+              # No --env or --env-file: exercise the image's fresh-install defaults.
+              docker("run", "--detach", "--name", container,
+                     "--publish", "127.0.0.1::8000",
+                     "--mount", f"type=bind,src={data},dst=/data", image)
+              address = docker("port", container, "8000/tcp")
+              base = f"http://{address}"
+              deadline = time.monotonic() + 90
+              while time.monotonic() < deadline:
+                  if docker("inspect", "--format", "{{.State.Running}}", container) != "true":
+                      raise RuntimeError("Container exited before becoming healthy")
+                  try:
+                      with urllib.request.urlopen(base + "/health", timeout=2) as response:
+                          if response.status == 200 and json.load(response) == {"status": "ok"}:
+                              return base
+                  except (urllib.error.URLError, TimeoutError, ConnectionError):
+                      pass
+                  time.sleep(1)
+              raise RuntimeError("Health endpoint did not become ready")
+
+          def admin_page(base):
+              with client.open(base + "/admin", timeout=10) as response:
+                  if response.status != 200 or urllib.parse.urlsplit(response.geturl()).path != "/admin":
+                      raise RuntimeError("Administrator session was not accepted")
+                  response.read()
+
+          def login(base, password):
+              payload = urllib.parse.urlencode({"username": "admin", "password": password}).encode()
+              with client.open(base + "/login", data=payload, timeout=10) as response:
+                  if response.status != 200 or urllib.parse.urlsplit(response.geturl()).path != "/admin":
+                      raise RuntimeError("Administrator login failed")
+                  response.read()
+              if not any(cookie.name == "resume_session" for cookie in cookies):
+                  raise RuntimeError("Login did not issue a session cookie")
+              admin_page(base)
+
+          def key_fingerprint():
+              # Read inside the container so host file ownership is irrelevant; never print the key.
+              return docker("exec", container, "python", "-c",
+                            "import hashlib; from pathlib import Path; "
+                            "key = Path('/data/.session-key').read_bytes(); "
+                            "assert len(key.strip()) == 64; "
+                            "print(hashlib.sha256(key).hexdigest())")
+
+          def check_users():
+              users = json.loads(docker("exec", container, "python", "-c",
+                                 "import json, sqlite3; "
+                                 "db = sqlite3.connect('file:/data/resume.db?mode=ro', uri=True); "
+                                 "print(json.dumps(db.execute('SELECT username, role FROM users ORDER BY id').fetchall()))"))
+              if users != [["admin", "admin"]]:
+                  raise RuntimeError("Fresh installation must contain only the administrator")
+
+          pattern = r"初始密码（仅显示一次）：(\S+)"
+          base = start()
+          logs = docker("logs", container)
+          passwords = re.findall(pattern, logs)
+          if len(passwords) != 1:
+              raise RuntimeError("Expected exactly one initial administrator password in startup logs")
+          password = passwords[0]
+          check_users()
+          login(base, password)
+          first_key = key_fingerprint()
+          print("Fresh no-env boot, administrator-only database, and login passed.")
+
+          docker("rm", "--force", container)
+          base = start()
+          if re.search(pattern, docker("logs", container)):
+              raise RuntimeError("Recreation incorrectly emitted a new initial password")
+          if key_fingerprint() != first_key:
+              raise RuntimeError("Session key changed after container recreation")
+          check_users()
+          admin_page(base)  # The original cookie must still authenticate after recreation.
+          cookies.clear()
+          login(base, password)  # The original password must still work for a new session.
+          print("Recreation preserved the session key, existing session, and administrator password.")
+          PY
+
+      - name: Clean up disposable smoke state
+        if: always()
+        shell: bash
+        env:
+          SMOKE_RESULT: ${{ steps.smoke.outcome }}
+        run: |
+          if [ "$SMOKE_RESULT" = failure ]; then
+            # Only this runner's disposable bootstrap credential can appear here.
+            docker logs resume-image-smoke || true
+          fi
+          docker rm --force resume-image-smoke || true
+          sudo rm -rf -- "$RUNNER_TEMP/resume-smoke-data"
+
+  publish:
+    name: Publish multi-platform image
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Prepare source-only build context and image name
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/resume-build"
+          git archive "$GITHUB_SHA" Dockerfile .dockerignore requirements.txt requirements.lock app \
+            | tar -x -C "$RUNNER_TEMP/resume-build"
+          printf 'name=ghcr.io/%s\n' "${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Generate image tags and OCI labels
+        id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=branch,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.description=Resume — self-hosted resume management with all persistent state in /data
+
+      - name: Build and publish both architectures
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ runner.temp }}/resume-build
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+
+      # GHCR packages are private by default. After the first successful publication,
+      # the owner must set package visibility to Public in GitHub package settings.

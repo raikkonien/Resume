@@ -1,0 +1,31 @@
+<article class="paper-detail">
+<h3 class="paper-detail-title">{{ row.title or '未填写文章题目' }}</h3>
+<section class="block" aria-labelledby="paper-information">
+  <h4 id="paper-information">文章信息</h4>
+  <dl class="basic-grid">
+    {% for field in section.fields %}{% if field.type != 'authors' %}
+    <div class="basic-item{% if field.key == 'title' or field.type == 'file' %} basic-item-wide{% endif %}">
+      <dt>{{ field.label }}</dt>
+      <dd>{% if field.type == 'file' %}{% if row.get(field.key) %}<a href="/files/papers/{{ row.id }}/{{ field.key }}?download=1">下载</a><span class="file-name">{{ row.get(field.key ~ '_name') }}</span>{% else %}—{% endif %}{% else %}{{ format_value(field, row) }}{% endif %}</dd>
+    </div>
+    {% endif %}{% endfor %}
+  </dl>
+</section>
+<section class="block" aria-labelledby="paper-authors">
+  <h4 id="paper-authors">作者<span class="count">{{ (row.authors or []) | length }} 位</span></h4>
+  {% if row.authors %}
+  <ol class="paper-author-list">
+    {% for author in row.authors %}
+    <li>
+      <h5>{{ author.name }}</h5>
+      <dl class="basic-grid">
+        <div class="basic-item basic-item-wide"><dt>单位</dt><dd class="multiline">{{ author.affiliation or '—' }}</dd></div>
+        <div class="basic-item"><dt>是否第一作者</dt><dd>{{ '是' if author.is_first else '否' }}</dd></div>
+        <div class="basic-item"><dt>是否通信作者</dt><dd>{{ '是' if author.is_corresponding else '否' }}</dd></div>
+      </dl>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}<p class="empty">尚未录入作者</p>{% endif %}
+</section>
+</article>

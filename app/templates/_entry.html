@@ -1,0 +1,15 @@
+{% from "macros.html" import render_field, render_attachment, render_ocr_only %}
+{% set file_fields = section.fields | selectattr('type', 'equalto', 'file') | list %}
+<form class="entry" data-url="/admin/{{ section.key }}{% if row.id is not none %}/{{ row.id }}{% endif %}" data-method="{{ 'PUT' if row.id is not none else 'POST' }}" data-ocr-url="/admin/{{ section.key }}/ocr" data-max-upload-mb="{{ max_upload_mb }}" enctype="multipart/form-data" aria-label="{{ section.label }}记录编辑">
+  <div class="entry-head"><span class="entry-label">{{ '修改' if row.id is not none else '新增' }}{{ section.label }} <span class="record-id">#{{ position }}</span></span><span class="status" role="status" aria-live="polite">尚未保存</span></div>
+  <div class="ocr-group">
+    <p class="muted ocr-group-intro"><strong>先上传，再核对：</strong>{% if section.key == 'contracts' %}选择或拖入 PDF，按顺序识别整份合同的全部页面；优先提取文字，扫描页才进行图像识别。仅补充空白字段，不覆盖手填内容，无法确认的信息留空。识别结果和附件均不会自动保存，请核对后点击「保存记录」。合同内容将发送至<a href="#ocr-settings">所配置的识别模型</a>。{% elif section.key == 'projects' %}仅合同支持自动识别：选择或拖入 PDF/JPG/PNG 后从第一页起逐页补全空白字段，不覆盖手填内容，取齐字段或读完整份文件后停止；结题日期不自动填写，也不参与完整性判断。经费到账证明、结题证明仅作为附件保存，不会自动识别或发送至识别模型。优先提取文字，扫描页才进行图像识别。中文名单匹配姓名，英文名单匹配拼音；无法确认的信息留空。合同内容将发送至<a href="#ocr-settings">所配置的识别模型</a>。{% else %}选择或拖入 PDF/JPG/PNG，自动补充空白字段，不覆盖手填内容。PDF 仅处理首页。优先提取文字，扫描页才进行图像识别。中文名单匹配姓名，英文名单匹配拼音；无法确认的信息留空。内容将发送至<a href="#ocr-settings">所配置的识别模型</a>。{% endif %}</p>
+    {% if section.key == 'papers' %}<p class="muted ocr-group-intro">作者按原文顺序识别，单位及第一 / 通讯作者身份以首页明确标注为准，请逐一核对；首页信息不全时可手动补充。中科院分区、JCR 分区仅手动选择，不参与识别。</p>{% endif %}
+    <div class="fields ocr-fields">
+      {% if file_fields %}{% for f in file_fields %}{{ render_attachment(f, row, section.key, row.id, max_upload_mb) }}{% endfor %}
+      {% else %}{{ render_ocr_only(section.key, row.id, max_upload_mb) }}{% endif %}
+    </div>
+  </div>
+  <div class="fields">{% for f in section.fields %}{% if f.type != 'file' %}{{ render_field(f, row, section.key, row.id) }}{% endif %}{% endfor %}</div>
+  <div class="form-footer entry-footer"><span class="muted">保存后返回表格；取消不会更改记录或附件。</span><div class="entry-actions"><button type="button" class="btn-cancel">取消</button><button type="submit" class="primary">保存记录</button></div></div>
+</form>

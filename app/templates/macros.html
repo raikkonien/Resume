@@ -1,0 +1,160 @@
+{% macro render_upload(control_id, name, accept) %}
+<div class="upload-control">
+  <label class="upload-dropzone" for="{{ control_id }}">
+    <input class="upload-input" id="{{ control_id }}" type="file"{% if name %} name="{{ name }}"{% endif %} accept="{{ accept }}" aria-describedby="{{ control_id }}-selected {{ control_id }}-upload-status">
+    <span class="upload-icon" aria-hidden="true">
+      {# Tabler Icons: upload (MIT). #}
+      <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2" />
+        <path d="M7 9l5 -5l5 5" />
+        <path d="M12 4l0 12" />
+      </svg>
+    </span>
+    <span class="upload-title">拖动至此上传</span>
+    <span class="upload-hint">或点击选择文件</span>
+  </label>
+  <div class="upload-selection" hidden>
+    <span class="upload-filename" id="{{ control_id }}-selected" aria-live="polite"></span>
+    <button type="button" class="btn-clear-upload" hidden>清除所选文件</button>
+  </div>
+  <p class="upload-status" id="{{ control_id }}-upload-status" role="status" aria-live="polite"></p>
+</div>
+{% endmacro %}
+
+{% macro render_author_row(author={}) %}
+<li class="author-row">
+  <fieldset>
+    <legend class="author-position">作者</legend>
+    <div class="author-details">
+      <label>姓名<input type="text" data-author-name value="{{ author.get('name', '') }}" autocomplete="off"></label>
+      <label>单位 / 机构<textarea data-author-affiliation rows="2">{{ author.get('affiliation', '') }}</textarea></label>
+    </div>
+    <div class="author-roles">
+      <label><input type="checkbox" data-author-first{% if author.get('is_first') %} checked{% endif %}>第一作者（含共同第一）</label>
+      <label><input type="checkbox" data-author-corresponding{% if author.get('is_corresponding') %} checked{% endif %}>通讯作者（含共同通讯）</label>
+    </div>
+    <div class="author-actions">
+      <button type="button" class="btn-author-up">上移</button>
+      <button type="button" class="btn-author-down">下移</button>
+      <button type="button" class="btn-author-remove danger">删除作者</button>
+    </div>
+  </fieldset>
+</li>
+{% endmacro %}
+
+{% macro render_field(f, row, section_key, entry_id) %}
+{% set control_id = section_key ~ '-' ~ entry_id ~ '-' ~ f.key %}
+{% set value = row.get(f.key) %}
+<div class="field{% if f.type in ('textarea', 'authors') %} field-wide{% endif %}">
+  {% if f.type == 'authors' %}
+  <fieldset class="authors-editor" aria-describedby="{{ control_id }}-help">
+    <legend>{{ f.label }}</legend>
+    <input type="hidden" id="{{ control_id }}" name="{{ f.key }}" value="{{ (value or []) | tojson | forceescape }}">
+    <p class="muted authors-help" id="{{ control_id }}-help">按论文署名顺序添加作者；同一作者可同时标记第一作者和通讯作者，也可分别标记多人。未能确认的单位或身份请留空。</p>
+    <ol class="authors-list">{% for author in value or [] %}{{ render_author_row(author) }}{% endfor %}</ol>
+    <p class="authors-empty muted"{% if value %} hidden{% endif %}>尚未添加作者，可手动添加或由首页识别补充。</p>
+    <button type="button" class="btn-author-add">添加作者</button>
+    <span class="authors-status sr-only" role="status" aria-live="polite"></span>
+    <template class="author-template">{{ render_author_row() }}</template>
+  </fieldset>
+  {% else %}
+  <label for="{{ control_id }}">{{ f.label }}</label>
+  {% if f.type == 'textarea' %}
+  <textarea id="{{ control_id }}" name="{{ f.key }}" rows="3">{{ value or '' }}</textarea>
+  {% elif f.type == 'select' %}
+  <select id="{{ control_id }}" name="{{ f.key }}">
+    <option value="">请选择</option>
+    {% for option in f.choices %}<option value="{{ option }}"{% if value == option %} selected{% endif %}>{{ option }}</option>{% endfor %}
+  </select>
+  {% elif f.type == 'checkbox' %}
+  <input id="{{ control_id }}" type="checkbox" name="{{ f.key }}" value="1"{% if value %} checked{% endif %}{% if entry_id is not none %} data-user-edited="true"{% endif %}>
+  {% elif f.type == 'file' %}
+  {% if value %}
+  <div class="file-current">
+    <a href="/files/{{ section_key }}/{{ entry_id }}/{{ f.key }}" target="_blank" rel="noopener">{{ row[f.key ~ '_name'] }}</a>
+    {% if section_key != 'basic' %}<label class="file-remove"><input type="checkbox" name="remove_file" value="{{ f.key }}">保存时删除</label>{% endif %}
+  </div>
+  {% endif %}
+  {{ render_upload(control_id, f.key, f.accept) }}
+  <small>支持 {{ f.accept }}</small>
+  {% elif f.type == 'date' and f.date_format == 'YYYY.MM.DD' %}
+  <div class="dotted-date">
+    <input id="{{ control_id }}" class="dotted-date-display" type="text" value="{{ (value or '') | replace('-', '.') }}" placeholder="YYYY.MM.DD" inputmode="decimal" maxlength="10" autocomplete="off" pattern="[0-9]{4}\.[0-9]{2}\.[0-9]{2}" aria-describedby="{{ control_id }}-help">
+    <span class="dotted-date-picker" title="选择{{ f.label }}">
+      <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg>
+      <input id="{{ control_id }}-calendar" class="dotted-date-native" type="date" name="{{ f.key }}" value="{{ value or '' }}" aria-label="选择{{ f.label }}日期" aria-describedby="{{ control_id }}-help">
+    </span>
+    <button type="button" class="btn-clear-date" aria-label="清除{{ f.label }}">清除</button>
+  </div>
+  <small id="{{ control_id }}-help">YYYY.MM.DD，可输入日期或选择日历。</small>
+  {% else %}
+  <input id="{{ control_id }}" name="{{ f.key }}"
+    type="{{ 'number' if f.type in ('year', 'int', 'number') else 'text' if f.type == 'rank' else f.type }}"
+    value="{{ value if value is not none else '' }}"
+    {% if f.type == 'year' %}min="1900" max="2100" step="1"{% endif %}
+    {% if f.type == 'int' %}min="0" step="1"{% endif %}
+    {% if f.type == 'number' %}min="0" step="0.01"{% endif %}
+    {% if f.type == 'rank' %}placeholder="1/7" pattern="\d+/\d+" title="本人排名/总人数，如 1/7"{% endif %}>
+  {% endif %}
+  {% endif %}
+  {% if f.key == 'pinyin' %}<small>填写完整拼音，如 Zhang San 或 San Zhang，用于英文作者匹配；首字母缩写不会自动补全。</small>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro render_attachment(f, row, section_key, entry_id, max_upload_mb) %}
+{% set control_id = section_key ~ '-' ~ entry_id ~ '-' ~ f.key %}
+{% set value = row.get(f.key) %}
+{% set ocr_enabled = section_key != 'projects' or f.key == 'contract' %}
+{% set saved_pdf = section_key == 'papers' and value and (row.get(f.key ~ '_name') or '').lower().endswith('.pdf') %}
+<div class="field ocr-zone{% if not ocr_enabled %} attachment-only{% endif %}" data-ocr-field="{{ f.key }}"{% if (section_key == 'projects' and f.key == 'contract') or (section_key == 'contracts' and f.key == 'contract_pdf') %} data-ocr-all-pages="true"{% endif %}{% if saved_pdf %} data-saved-ocr-url="/admin/papers/{{ entry_id }}/ocr"{% endif %}>
+  <label for="{{ control_id }}">{{ f.label }}</label>
+  {% if value %}
+  <div class="file-current">
+    <a href="/files/{{ section_key }}/{{ entry_id }}/{{ f.key }}" target="_blank" rel="noopener">{{ row[f.key ~ '_name'] }}</a>
+    <label class="file-remove"><input type="checkbox" name="remove_file" value="{{ f.key }}">保存时删除</label>
+  </div>
+  {% endif %}
+  {% if saved_pdf %}
+  <div class="saved-ocr-actions">
+    <button type="button" class="ocr-saved" aria-describedby="{{ control_id }}-saved-ocr-help">重新识别</button>
+    <small class="saved-ocr-help" id="{{ control_id }}-saved-ocr-help">仅识别当前已保存 PDF 的首页。确认后可替换识别到的字段和作者；未识别内容、手工分区及识别期间的编辑均保留，点击保存记录才会写入。</small>
+  </div>
+  {% endif %}
+  {{ render_upload(control_id, f.key, f.accept) }}
+  <small>支持 {{ f.accept }}，单个文件不超过 {{ max_upload_mb }}MB；{% if ocr_enabled %}选择或拖拽后自动识别。{% else %}仅作为附件保存，不进行自动识别。{% endif %}</small>
+  <div class="ocr-status-row">
+    <p class="ocr-status" role="status" aria-live="polite"></p>
+    {% if ocr_enabled %}<button type="button" class="ocr-retry" hidden>重试</button>{% endif %}
+    {% if saved_pdf %}<button type="button" class="ocr-cancel" hidden>停止识别</button>{% endif %}
+  </div>
+</div>
+{% endmacro %}
+
+{% macro render_ocr_only(section_key, entry_id, max_upload_mb) %}
+{% set control_id = section_key ~ '-' ~ entry_id ~ '-ocr-only' %}
+<div class="field ocr-zone" data-ocr-field="">
+  <label for="{{ control_id }}">自动识别文件<span class="record-id">不作为附件保存</span></label>
+  {{ render_upload(control_id, '', '.pdf,.jpg,.jpeg,.png') }}
+  <small>支持 .pdf,.jpg,.jpeg,.png；选择或拖拽后自动识别并填充字段，单个文件不超过 {{ max_upload_mb }}MB。</small>
+  <div class="ocr-status-row">
+    <p class="ocr-status" role="status" aria-live="polite"></p>
+    <button type="button" class="ocr-retry" hidden>重试</button>
+  </div>
+</div>
+{% endmacro %}
+
+{% macro render_author_names(authors, profile) -%}
+{% for author in authors or [] -%}
+{% set prefix = ('#' if author.is_first else '') ~ ('*' if author.is_corresponding else '') -%}
+{% set role = ('第一作者 ' if author.is_first else '') ~ ('通信作者' if author.is_corresponding else '') -%}
+{% if profile and matches_name(author.name, profile.get('name'), profile.get('pinyin')) -%}
+<strong class="paper-author-name"{% if role %} title="{{ role | trim }}"{% endif %}>{{ prefix }}{{ author.name }}</strong>
+{%- else -%}
+<span class="paper-author-name"{% if role %} title="{{ role | trim }}"{% endif %}>{{ prefix }}{{ author.name }}</span>
+{%- endif %}{% if not loop.last %}；{% endif %}
+{%- else %}—{% endfor %}
+{%- endmacro %}
+
+{% macro render_cell(field, row, section_key, show_filename=false, profile=none) %}
+<td{% if section_key == 'papers' %} data-field="{{ field.key }}"{% endif %}{% if field.type == 'authors' %} class="paper-authors"{% elif field.type == 'textarea' %} class="multiline"{% elif field.type in ('date', 'month', 'year') %} class="date-value"{% endif %}>{% if field.type == 'authors' %}{{ render_author_names(row.get(field.key), profile) }}{% elif field.type == 'file' %}{% if row[field.key] %}<a href="/files/{{ section_key }}/{{ row.id }}/{{ field.key }}?download=1" title="{{ row[field.key ~ '_name'] }}">下载</a>{% if show_filename %}<span class="file-name">{{ row[field.key ~ '_name'] }}</span>{% endif %}{% else %}—{% endif %}{% else %}{{ format_value(field, row) }}{% endif %}</td>
+{% endmacro %}

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}登录 · 个人简历{% endblock %}
+{% block content %}
+<section class="login-panel">
+  <p class="eyebrow">PRIVATE RESUME</p>
+  <h1>你的经历，<br>妥善收录。</h1>
+  <p class="muted">使用个人账号登录，查看与维护自己的简历。</p>
+  <form method="post" action="/login">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label for="username">用户名</label>
+    <input id="username" type="text" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" value="{{ username or '' }}" required autofocus>
+    <label for="password">密码</label>
+    <input id="password" type="password" name="password" autocomplete="current-password" required>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    <button class="primary" type="submit">进入资料库 <span aria-hidden="true">→</span></button>
+  </form>
+  <p class="login-note">每个账号独立保存资料 · 管理员负责账号与 OCR 设置</p>
+</section>
+{% endblock %}

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}个人简历{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}?v={{ asset_versions['style.css'] }}">
+  {% block scripts %}{% endblock %}
+</head>
+<body>
+  <a class="skip-link" href="#main">跳转到内容</a>
+  <header class="site-header">
+    <a class="brand" href="{{ '/admin' if request.state.user and request.state.user.role == 'admin' else '/' }}">个人档案<span>RESUME</span></a>
+    <nav aria-label="主导航">{% if request.state.user %}<span class="account-name">{{ request.state.user.username }}</span>{% endif %}{% block nav %}{% endblock %}</nav>
+  </header>
+  <main id="main" class="container">{% block content %}{% endblock %}</main>
+  <footer class="site-footer">个人简历 · 私有资料库</footer>
+</body>
+</html>

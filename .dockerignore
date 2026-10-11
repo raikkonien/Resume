@@ -1,0 +1,19 @@
+# Only release inputs enter the Docker build context.
+**
+!Dockerfile
+!requirements.txt
+!requirements.lock
+!app/
+!app/**
+# The source allowlist must not re-include local Python/tool caches.
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.DS_Store
+**/.venv/
+**/.git/
+**/.env
+**/.env.*
