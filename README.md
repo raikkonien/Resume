@@ -23,7 +23,7 @@ docker run -d --name resume \
   resume:distribution
 ```
 
-Windows 导入命令相同，启动时沿用下方 PowerShell 的路径写法。另有包含两种架构的 `dist/resume-image.tar.gz`，适合启用 containerd image store 的现代 Docker；旧版 Docker 使用上述单架构包，避免加载多架构归档时丢失目标架构。`dist/resume-source.zip` 是不含数据、密钥及本地规划记录的发布源码包；镜像包和源码包均不应提交到 Git 仓库。`dist/SHA256SUMS` 用于校验这些文件。
+Windows 导入命令相同，启动时沿用下方 PowerShell 的路径写法。下载地址：[GitHub Releases](https://github.com/raikkonien/Resume/releases)。单架构包也适用于旧版 Docker，避免加载多架构归档时丢失目标架构；直接从 GHCR 拉取则自动选择对应架构。`dist/resume-source.zip` 是不含数据、密钥及本地规划记录的发布源码包；镜像包和源码包均不应提交到 Git 仓库。`dist/SHA256SUMS` 用于校验这些文件。
 
 
 ## 安装：一个目录、一个容器
