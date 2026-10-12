@@ -279,12 +279,10 @@ export function createTableController(panel, initialLayout, { onLayoutChange, on
     const visiblePositions = new Map(visible.map((record, index) => [record.id, index]));
     for (const record of records) {
       const at = visiblePositions.get(record.id) ?? -1;
-      for (const control of record.node.querySelectorAll('.row-drag, .row-up, .row-down')) {
-        const blocked = !canReorder || at < 0 || (control.matches('.row-up') && at === 0)
-          || (control.matches('.row-down') && at === visible.length - 1);
-        control.disabled = blocked;
+      for (const control of record.node.querySelectorAll('.row-drag')) {
+        control.disabled = !canReorder || at < 0;
         control.title = layout.sort ? '切换到手动顺序后拖动' : pending ? '正在保存行顺序'
-          : control.matches('.row-up') ? '上移' : control.matches('.row-down') ? '下移' : '拖动调整顺序';
+          : '拖动调整顺序；可按上下方向键排序';
       }
     }
     const count = list.querySelector('.table-count');
@@ -354,7 +352,7 @@ export function createTableController(panel, initialLayout, { onLayoutChange, on
     return full.map(id => selected.has(id) ? after[index++] : id);
   }
 
-  async function reorder(before, after, focusID, focusClass) {
+  async function reorder(before, after, focusID) {
     if (pending || panel.dataset.busy === 'true' || panel.querySelector('#entry-dialog')?.open
       || layout.sort || typeof onReorder !== 'function') return;
     const old = records.map(row => row.id), next = slots(old, before, after);
@@ -380,9 +378,7 @@ export function createTableController(panel, initialLayout, { onLayoutChange, on
       render();
       if (focusID != null) {
         const row = byID.get(focusID)?.node;
-        const preferred = row?.querySelector(focusClass || '.row-drag');
-        const control = preferred && !preferred.disabled ? preferred : row?.querySelector('.row-drag:not(:disabled)');
-        control?.focus({ preventScroll: true });
+        row?.querySelector('.row-drag:not(:disabled)')?.focus({ preventScroll: true });
       }
     }
   }
@@ -595,15 +591,77 @@ export function createTableController(panel, initialLayout, { onLayoutChange, on
     inputs[0]?.focus();
   }
 
+  function createRowGhost(current) {
+    const row = byID.get(current.id).node;
+    const rect = row.getBoundingClientRect(), viewport = wrap.getBoundingClientRect();
+    const ghost = element('div', 'table-row-ghost');
+    ghost.setAttribute('aria-hidden', 'true');
+    ghost.inert = true;
+    current.ghostWidth = wrap.clientWidth;
+    ghost.style.width = `${current.ghostWidth}px`;
+    const copy = row.cloneNode(true), copyTable = element('table', 'entry-table');
+    copy.removeAttribute('data-id');
+    copy.querySelectorAll('[id]').forEach(node => node.removeAttribute('id'));
+    copy.querySelectorAll('button, input, select, textarea').forEach(node => { node.disabled = true; });
+    [...row.cells].forEach((cell, index) => {
+      if (cell.hidden) return;
+      const width = `${cell.getBoundingClientRect().width}px`;
+      Object.assign(copy.cells[index].style, { width, minWidth: width, maxWidth: width });
+    });
+    copyTable.style.width = `${rect.width}px`;
+    copyTable.style.marginLeft = `${rect.left - viewport.left}px`;
+    copyTable.append(element('tbody'));
+    copyTable.tBodies[0].append(copy);
+    ghost.append(copyTable);
+    document.body.append(ghost);
+    current.ghost = ghost;
+    current.ghostLeft = viewport.left;
+    current.ghostTop = rect.top;
+    current.row = row;
+    row.classList.add('table-row-placeholder');
+  }
+
+  function moveRowGhost(current) {
+    const left = Math.max(4, Math.min(window.innerWidth - current.ghostWidth - 4,
+      current.ghostLeft + current.x - current.startX));
+    const top = current.ghostTop + current.y - current.startY;
+    current.ghost.style.transform = `translate3d(${left}px,${top}px,0)`;
+  }
+
+  function previewRows(current, next) {
+    const positions = new Map(visible.filter(record => record.id !== current.id)
+      .map(record => [record.node, record.node.getBoundingClientRect().top]));
+    current.animations.forEach(animation => animation.cancel());
+    current.animations.clear();
+    current.order = next;
+    preview = slots(records.map(record => record.id), current.before, next);
+    // Keep cell contents, sizing and focus intact while previewing insertion.
+    tbody.append(...preview.map(id => byID.get(id).node));
+    visible = next.map(id => byID.get(id));
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    for (const [node, top] of positions) {
+      const distance = top - node.getBoundingClientRect().top;
+      if (Math.abs(distance) < 1) continue;
+      const animation = node.animate([
+        { transform: `translateY(${distance}px)` }, { transform: 'translateY(0)' },
+      ], { duration: 160, easing: 'ease-out' });
+      current.animations.set(node, animation);
+      animation.onfinish = () => current.animations.delete(node);
+    }
+  }
+
   function cancelDrag() {
     if (!drag) return;
     const current = drag;
     drag = null;
     current.events.abort();
     cancelAnimationFrame(current.frame);
-    try { if (current.handle.hasPointerCapture(current.pointerID)) current.handle.releasePointerCapture(current.pointerID); } catch { /* Detached handle after refresh. */ }
+    try { if (current.capture.hasPointerCapture(current.pointerID)) current.capture.releasePointerCapture(current.pointerID); } catch { /* Detached column handle after refresh. */ }
     current.handle.classList.remove('table-dragging');
     current.target?.classList.remove('drop-target');
+    current.ghost?.remove();
+    current.row?.classList.remove('table-row-placeholder');
+    current.animations.forEach(animation => animation.cancel());
     preview = null;
   }
 
@@ -643,17 +701,23 @@ export function createTableController(panel, initialLayout, { onLayoutChange, on
       current.after = target ? current.x > target.getBoundingClientRect().left + target.getBoundingClientRect().width / 2 : false;
       if (target && target.dataset.field !== current.key) target.classList.add('drop-target');
     } else {
-      const hit = document.elementFromPoint(current.x, current.y)?.closest('tr[data-id]');
-      if (!hit || hit.closest('table') !== table || hit.hidden) return;
-      const targetID = Number(hit.dataset.id);
-      if (targetID === current.id || !current.order.includes(targetID)) return;
-      const rect = hit.getBoundingClientRect(), after = current.y > rect.top + rect.height / 2;
-      const next = current.order.filter(id => id !== current.id);
-      next.splice(next.indexOf(targetID) + (after ? 1 : 0), 0, current.id);
+      moveRowGhost(current);
+      const viewport = wrap.getBoundingClientRect();
+      if (current.x < viewport.left || current.x > viewport.right) return;
+      const placeholder = current.row.getBoundingClientRect();
+      if (current.y >= placeholder.top && current.y <= placeholder.bottom) return;
+      const candidates = current.order.filter(id => id !== current.id);
+      const target = candidates.findIndex(id => {
+        const node = byID.get(id).node, rect = node.getBoundingClientRect();
+        // Hit-test layout positions, not the in-flight displacement animation.
+        const shift = current.animations.has(node)
+          ? new DOMMatrixReadOnly(getComputedStyle(node).transform).m42 : 0;
+        return current.y < rect.top - shift + rect.height / 2;
+      });
+      const next = candidates.slice();
+      next.splice(target < 0 ? next.length : target, 0, current.id);
       if (next.every((id, index) => id === current.order[index])) return;
-      current.order = next;
-      preview = slots(records.map(row => row.id), current.before, next);
-      render();
+      previewRows(current, next);
     }
   }
 
@@ -667,10 +731,11 @@ export function createTableController(panel, initialLayout, { onLayoutChange, on
     cancelDrag();
     closePopover(false);
     const current = {
-      kind, handle, key: th?.dataset.field, id: Number(handle.closest('tr[data-id]')?.dataset.id),
+      kind, handle, capture: kind === 'row' ? panel : handle, key: th?.dataset.field, id: Number(handle.closest('tr[data-id]')?.dataset.id),
       pointerID: event.pointerId, startX: event.clientX, startY: event.clientY,
       x: event.clientX, y: event.clientY, active: false, events: new AbortController(), frame: 0,
       before: visible.map(row => row.id), order: visible.map(row => row.id), target: null,
+      animations: new Map(),
     };
     drag = current;
     const frame = () => {
@@ -686,7 +751,9 @@ export function createTableController(panel, initialLayout, { onLayoutChange, on
       if (!current.active && Math.hypot(current.x - current.startX, current.y - current.startY) > 6) {
         current.active = true;
         handle.classList.add('table-dragging');
-        try { handle.setPointerCapture(current.pointerID); } catch { /* Pointer may already have ended. */ }
+        if (kind === 'row') createRowGhost(current);
+        // A persistent panel keeps row capture alive when its rows change slots.
+        try { current.capture.setPointerCapture(current.pointerID); } catch { /* Pointer may already have ended. */ }
         current.frame = requestAnimationFrame(frame);
       }
       if (current.active) { move.preventDefault(); updateDrag(current); }
@@ -717,6 +784,10 @@ export function createTableController(panel, initialLayout, { onLayoutChange, on
     document.addEventListener('keydown', key => {
       if (key.key === 'Escape') { key.preventDefault(); key.stopPropagation(); cancelDrag(); render(); }
     }, { signal: current.events.signal });
+    window.addEventListener('blur', () => { cancelDrag(); render(); }, { signal: current.events.signal });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { cancelDrag(); render(); }
+    }, { signal: current.events.signal });
   }
 
   // Delegated listeners attach to the persistent panel, never to replaced table DOM.
@@ -744,13 +815,17 @@ export function createTableController(panel, initialLayout, { onLayoutChange, on
       changed();
       return;
     }
-    if (target.matches('.row-up, .row-down') && !target.disabled && !layout.sort && !pending) {
-      const id = Number(target.closest('tr[data-id]').dataset.id), before = visible.map(row => row.id);
-      const order = before.slice(), index = order.indexOf(id), other = index + (target.matches('.row-up') ? -1 : 1);
-      if (index >= 0 && other >= 0 && other < order.length) {
-        [order[index], order[other]] = [order[other], order[index]];
-        void reorder(before, order, id, target.matches('.row-up') ? '.row-up' : '.row-down');
-      }
+  });
+  panel.addEventListener('keydown', event => {
+    const handle = event.target.closest('.row-drag');
+    if (!handle || !list?.contains(handle) || handle.disabled || drag
+      || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+    event.preventDefault();
+    const id = Number(handle.closest('tr[data-id]').dataset.id), before = visible.map(row => row.id);
+    const order = before.slice(), index = order.indexOf(id), other = index + (event.key === 'ArrowUp' ? -1 : 1);
+    if (index >= 0 && other >= 0 && other < order.length) {
+      [order[index], order[other]] = [order[other], order[index]];
+      void reorder(before, order, id);
     }
   });
   refresh();

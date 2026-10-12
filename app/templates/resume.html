@@ -5,7 +5,8 @@
 {% block content %}
 <div class="page-heading"><div><p class="eyebrow">个人资料工作台</p><h1>简历</h1></div><button type="button" id="export-resume" class="primary" data-url="/resume/export" aria-haspopup="dialog">{{ icon('download') }}导出简历</button></div>
 <div class="resume-search" role="search"><label class="sr-only" for="resume-search-input">搜索全部简历内容</label><div class="search-field">{{ icon('search') }}<input type="search" id="resume-search-input" placeholder="搜索全部简历内容…" autocomplete="off" spellcheck="false"><button type="button" id="resume-search-clear" class="icon-button quiet" aria-label="清除搜索" title="清除搜索" hidden>{{ icon('close') }}</button></div></div>
-<nav class="resume-tabs" role="tablist" aria-label="简历栏目"><button type="button" class="resume-tab active" role="tab" data-tab="overview" aria-selected="true">概览</button>{% for section in all_sections %}<button type="button" class="resume-tab" role="tab" data-tab="{{ section.key }}" aria-selected="false" tabindex="-1">{{ section.label }}</button>{% endfor %}</nav>
+{% set tab_labels = {'basic': '基本信息', 'positions': '岗位', 'software': '软著', 'standards': '标准'} %}
+<nav class="resume-tabs" role="tablist" aria-label="简历栏目"><button type="button" class="resume-tab active" role="tab" data-tab="overview" aria-selected="true">概览</button>{% for section in all_sections %}<button type="button" class="resume-tab" role="tab" data-tab="{{ section.key }}" aria-selected="false" tabindex="-1">{{ tab_labels.get(section.key, section.label) }}</button>{% endfor %}</nav>
 <p id="resume-search-status" class="muted" role="status" aria-live="polite"></p>
 <div id="temporary-filter" class="filter-bar" hidden><span></span><button type="button" class="quiet">清除定位筛选</button></div>
 <p id="resume-empty" class="empty card" hidden>没有匹配的记录</p>

@@ -196,7 +196,7 @@ ENTRY_SECTIONS = (
         Field("society", "学协会名称", "text"),
         Field("committee", "专委会名称", "text"),
         Field("term", "届数", "text"),
-        Field("role", "任职岗位", "select", ("主委", "常务副主委", "副主委", "常委", "委员")),
+        Field("role", "任职岗位", "select", ("主委", "常务副主委", "副主委", "常委", "委员", "理事", "常务理事")),
         Field("begin_month", "聘期开始", "month"),
         Field("end_month", "聘期结束", "month"),
         Field("certificate", "证书", "file", accept=DOC),
