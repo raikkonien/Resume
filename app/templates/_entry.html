@@ -5,6 +5,7 @@
   <div class="ocr-group">
     <p class="muted ocr-group-intro"><strong>先上传，再核对：</strong>{% if section.key == 'contracts' %}选择或拖入 PDF，按顺序识别整份合同的全部页面；优先提取文字，扫描页才进行图像识别。仅补充空白字段，不覆盖手填内容，无法确认的信息留空。识别结果和附件均不会自动保存，请核对后点击「保存记录」。合同内容将发送至<a href="/settings#model" data-leave>本人配置的识别模型</a>。{% elif section.key == 'projects' %}仅合同支持自动识别：选择或拖入 PDF/JPG/PNG 后从第一页起逐页补全空白字段，不覆盖手填内容，取齐字段或读完整份文件后停止；结题日期不自动填写，也不参与完整性判断。经费到账证明、结题证明仅作为附件保存，不会自动识别或发送至识别模型。优先提取文字，扫描页才进行图像识别。中文名单匹配姓名，英文名单匹配拼音；无法确认的信息留空。合同内容将发送至<a href="/settings#model" data-leave>本人配置的识别模型</a>。{% else %}选择或拖入 PDF/JPG/PNG，自动补充空白字段，不覆盖手填内容。PDF 仅处理首页。优先提取文字，扫描页才进行图像识别。中文名单匹配姓名，英文名单匹配拼音；无法确认的信息留空。内容将发送至<a href="/settings#model" data-leave>本人配置的识别模型</a>。{% endif %}</p>
     {% if section.key == 'papers' %}<p class="muted ocr-group-intro">作者按原文顺序识别，单位及第一 / 通讯作者身份以首页明确标注为准，请逐一核对；首页信息不全时可手动补充。中科院分区、JCR 分区仅手动选择，不参与识别。</p>{% endif %}
+    {% if section.key == 'books' %}<p class="muted ocr-group-intro">论著的自动识别仅适用于书首页、书扉页；出版合同仅作为附件保存，不自动识别或发送至识别模型。</p>{% endif %}
     <div class="fields ocr-fields">
       {% if file_fields %}{% for f in file_fields %}{{ render_attachment(f, row, section.key, row.id, max_upload_mb) }}{% endfor %}
       {% else %}{{ render_ocr_only(section.key, row.id, max_upload_mb) }}{% endif %}

@@ -121,6 +121,7 @@ def recognize(
     the upload is even read, let alone sent to the model.
     Employment contracts always scan every page and accumulate distinct terms;
     their other fields keep the first confirmed value.
+    Book publishing contracts are storage-only and are never sent to the model.
 
     ``on_page_start``, when given, is called once per page (1-based) right before
     that page's model call. ``should_stop``, when given, is polled before starting
@@ -128,7 +129,8 @@ def recognize(
     ``RecognitionCancelled`` instead of doing further model work. A provider call
     already in flight when cancellation is noticed is still allowed to finish.
     """
-    if section.key == "projects" and source_field != "contract":
+    if ((section.key == "projects" and source_field != "contract")
+            or (section.key == "books" and source_field == "publishing_contract")):
         raise ValueError("该附件不支持自动识别，请手动填写")
     employment_contract = section.key == "contracts"
     if employment_contract and source_field not in ("", "contract_pdf"):

@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import os
 import shutil
 import sqlite3
@@ -13,6 +13,7 @@ os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
 os.environ.setdefault("MCP_TOKEN", "test-mcp-token")
 
 from app import db
+from app.dashboard import build_dashboard
 from app.sections import BASIC, ENTRY_SECTIONS, SECTIONS, Section, event_year, parse_form, record_label
 
 from support import ADMIN_TEST_PASSWORD, original_user_id
@@ -244,26 +245,65 @@ class EntryStorageTests(unittest.TestCase):
         db.init_db()
         owner = self.user_id
         originals = {}
-        with self.open_db() as conn:
-            for key, new_field in (("software", "reg_date"), ("standards", "publish_date")):
+        new_fields = (("software", "year"), ("standards", "publish_date"))
+        with self.open_db() as conn, conn:
+            for key, new_field in new_fields:
                 current = SECTIONS[key]
                 old = Section(key, current.label, tuple(field for field in current.fields if field.key != new_field))
                 conn.execute(f'DROP TABLE "{key}"')
                 db._create_section(conn, old, key)
-                id = db.insert_row(conn, old, {"name": "Undated historical record"}, owner)
+                values = {"name": "Undated historical record"}
+                if key == "software":
+                    values.update({
+                        "holder": "Original holder", "reg_number": "2024SR123456",
+                        "reg_date": "2024-02-29", "cert_number": "Original certificate", "rank": "2/7",
+                        "certificate": "software/41/certificate.pdf", "certificate_name": "原证书.pdf",
+                    })
+                id = db.insert_row(conn, old, values, owner)
+                if key == "software":
+                    with conn:
+                        conn.execute(
+                            "UPDATE software SET id = 41, sort_order = 7, created_at = ? WHERE id = ?",
+                            ("2026-10-11 12:00:00", id),
+                        )
+                    id = 41
                 originals[key] = (id, db.get_row(conn, old, id, owner))
         db.init_db()
+        db.init_db()
         with self.open_db() as conn:
-            for key, new_field in (("software", "reg_date"), ("standards", "publish_date")):
+            year_column = next(row for row in conn.execute("PRAGMA table_info(software)") if row["name"] == "year")
+            self.assertEqual(year_column["type"], "INTEGER")
+            self.assertEqual(year_column["notnull"], 0)
+            self.assertIsNone(year_column["dflt_value"])
+            dashboard = build_dashboard(conn, owner, today=date(2026, 10, 12))
+            software = next(section for section in dashboard["sections"] if section["key"] == "software")
+            self.assertEqual(software["counts"], [0, 0, 0])
+            self.assertEqual(software["undated_count"], 1)
+            for key, new_field in new_fields:
                 id, before = originals[key]
                 row = db.get_row(conn, SECTIONS[key], id, owner)
                 self.assertIsNone(row[new_field])
                 self.assertIsNone(event_year(SECTIONS[key], row))
                 for field, value in before.items():
-                    self.assertEqual(row[field], value)
-                parsed = parse_form(SECTIONS[key], {new_field: "2026-10-11"})
+                    self.assertEqual(row[field], value, field)
+                form = {field.key: before.get(field.key) or "" for field in SECTIONS[key].fields if field.type != "file"}
+                form[new_field] = "2025" if key == "software" else "2026-10-11"
+                parsed = parse_form(SECTIONS[key], form)
                 db.update_row(conn, SECTIONS[key], id, parsed, owner)
-                self.assertEqual(event_year(SECTIONS[key], db.get_row(conn, SECTIONS[key], id, owner)), 2026)
+        db.init_db()
+        with self.open_db() as conn:
+            for key, new_field in new_fields:
+                id, before = originals[key]
+                row = db.get_row(conn, SECTIONS[key], id, owner)
+                self.assertEqual(row[new_field], 2025 if key == "software" else "2026-10-11")
+                self.assertEqual(event_year(SECTIONS[key], row), 2025 if key == "software" else 2026)
+                for field, value in before.items():
+                    self.assertEqual(row[field], value, field)
+            dashboard = build_dashboard(conn, owner, today=date(2026, 10, 12))
+            software = next(section for section in dashboard["sections"] if section["key"] == "software")
+            self.assertEqual(software["counts"], [0, 1, 0])
+            self.assertEqual(software["current_count"], 0)
+            self.assertEqual(software["undated_count"], 0)
 
 class PaperStorageTests(unittest.TestCase):
     def setUp(self):
@@ -359,26 +399,44 @@ class BusinessYearTests(unittest.TestCase):
             ("papers", {"year": "2026"}, 2026),
             ("annual_reviews", {"year": "2026"}, 2026),
             ("patents", {"grant_date": "2025-02-28", "apply_date": "2024-01-01"}, 2025),
-            ("patents", {"grant_date": "2025-02-29", "apply_date": "2026-01-01"}, 2026),
-            ("patents", {"grant_date": "2025-not-a-date", "apply_date": ""}, None),
+            ("patents", {"grant_date": "2025-02-29", "apply_date": "2026-01-01"}, None),
+            ("patents", {"grant_date": "2025-not-a-date", "apply_date": "2026-01-01"}, None),
+            ("patents", {"apply_date": "2026-01-01"}, None),
+            ("work", {"begin_date": "2024-12-31", "end_date": "2026-01-01"}, 2024),
+            ("appointments", {"begin_date": "2024-12-31", "end_date": "2026-01-01"}, 2024),
+            ("positions", {"begin_date": "2024-12-31"}, 2024),
             ("projects", {"begin_date": "2024-12-31", "end_date": "2026-01-01", "close_date": "2026-02-02"}, 2024),
-            ("education", {"award_year": 2026, "end_date": "2026-01-01"}, None),
+            ("trainings", {"begin_date": "2024-12-31", "end_date": "2026-01-01"}, 2024),
+            ("education", {"award_year": 2026, "begin_date": "2024-01-01", "end_date": "2025-01-01"}, 2026),
+            ("education", {"begin_date": "2024-01-01", "end_date": "2026-01-01"}, None),
+            ("education", {"award_year": "2025x", "begin_date": "2024-01-01"}, None),
             ("memberships", {"begin_month": "2025-12"}, 2025),
             ("memberships", {"begin_month": "2025-13"}, None),
             ("software", {"reg_number": "2026xyz", "created_at": "2026-10-11"}, None),
-            ("software", {"reg_date": "2026-10-11"}, 2026),
+            ("software", {"reg_date": "2026-10-11"}, None),
+            ("software", {"year": 2025, "reg_date": "2026-10-11"}, 2025),
+            ("software", {"year": "2025", "reg_date": "2026-10-11"}, 2025),
+            ("software", {"year": "2025x", "reg_date": "2026-10-11"}, None),
             ("standards", {"publish_date": "2026-10-11"}, 2026),
             ("basic", {"birth_month": "2000-01"}, None),
         ]
         for key, row, expected in cases:
             with self.subTest(key=key, row=row):
                 self.assertEqual(event_year(SECTIONS[key], row), expected)
-        for value in (True, 2026.0, "2026x", "2026-01-01", " 2026", 1899, 2101, None, ""):
-            with self.subTest(value=value):
-                self.assertIsNone(event_year(SECTIONS["papers"], {"year": value}))
-        for value in ("2026-1-01", "2026-01-1", "2026-04-31", "2026-01-01junk", "2101-01-01", "1899-12-31"):
-            with self.subTest(value=value):
-                self.assertIsNone(event_year(SECTIONS["work"], {"begin_date": value}))
+        for key, field in (("papers", "year"), ("software", "year"), ("education", "award_year")):
+            for value in (True, 2026.0, "2026x", "2026-01-01", " 2026", 1899, 2101, None, ""):
+                with self.subTest(key=key, value=value):
+                    self.assertIsNone(event_year(SECTIONS[key], {field: value}))
+            for value in (1900, 2100):
+                with self.subTest(key=key, value=value):
+                    self.assertEqual(event_year(SECTIONS[key], {field: value}), value)
+        for key, field in (("work", "begin_date"), ("appointments", "begin_date"),
+                           ("positions", "begin_date"), ("projects", "begin_date"),
+                           ("trainings", "begin_date"), ("patents", "grant_date")):
+            for value in ("2026-1-01", "2026-01-1", "2026-04-31", "2026-01-01junk",
+                          "2101-01-01", "1899-12-31", None, ""):
+                with self.subTest(key=key, value=value):
+                    self.assertIsNone(event_year(SECTIONS[key], {field: value}))
 
     def test_record_labels_and_metadata_cover_every_section(self):
         self.assertEqual(record_label(BASIC, {"name": "Person"}), "个人基本信息")

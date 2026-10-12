@@ -524,18 +524,21 @@ class EmploymentContractTests(unittest.TestCase):
                     model.assert_not_called()
 
 
-class ProjectAttachmentEligibilityTests(unittest.TestCase):
-    def test_non_contract_project_attachments_are_rejected_before_any_model_call(self):
+class AttachmentEligibilityTests(unittest.TestCase):
+    def test_attachment_only_sources_are_rejected_before_any_model_call(self):
         with pymupdf.open() as document:
             document.new_page().insert_text((72, 72), "Fund proof cover page with some readable text")
             data = document.tobytes()
-        for source_field in ("fund_proof", "close_proof", ""):
-            with self.subTest(source_field=source_field):
+        for section, source_field in (
+            ("projects", "fund_proof"), ("projects", "close_proof"), ("projects", ""),
+            ("books", "publishing_contract"),
+        ):
+            with self.subTest(section=section, source_field=source_field):
                 with io.BytesIO(data) as stream:
                     upload = UploadFile(filename="proof.pdf", file=stream)
                     with patch("app.ocr._call_model") as mocked_call:
                         with self.assertRaises(ValueError):
-                            recognize(SECTIONS["projects"], upload, {}, "张三", "Zhang San", source_field)
+                            recognize(SECTIONS[section], upload, {}, "张三", "Zhang San", source_field)
                         mocked_call.assert_not_called()
 
 

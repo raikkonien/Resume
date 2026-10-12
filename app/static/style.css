@@ -152,6 +152,7 @@ body:has(dialog[open]) { overflow:hidden; }
 .file-current { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; font-size:13px; }
 .file-current a,.file-name { overflow-wrap:anywhere; }
 .file-remove { color:var(--danger); }
+.ocr-zone > .file-current { margin-top:8px; }
 .ocr-group { padding-bottom:24px; margin-bottom:24px; border-bottom:1px solid var(--line); }
 .ocr-group-intro { margin-bottom:16px; }
 .ocr-fields { grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr)); }

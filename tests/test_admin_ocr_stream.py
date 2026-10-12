@@ -74,12 +74,13 @@ class OcrStreamEndpointTests(unittest.TestCase):
         self.assertEqual(events[0]["type"], "error")
         self.assertIsInstance(events[0]["error"], str)
 
-    def test_projects_rejects_non_contract_fields_before_any_model_call(self):
-        for field in ("fund_proof", "close_proof"):
-            with self.subTest(field=field):
+    def test_attachment_only_fields_are_rejected_before_any_model_call(self):
+        for section, field in (("projects", "fund_proof"), ("projects", "close_proof"),
+                               ("books", "publishing_contract")):
+            with self.subTest(section=section, field=field):
                 with patch("app.ocr._call_model") as mocked_call:
                     response = self.client.post(
-                        "/api/entries/projects/ocr",
+                        f"/api/entries/{section}/ocr",
                         files={"file": ("proof.pdf", make_pdf_bytes(1), "application/pdf")},
                         data={"field": field},
                     )
@@ -100,7 +101,12 @@ class OcrStreamEndpointTests(unittest.TestCase):
                 files={"file": ("proof.pdf", make_pdf_bytes(1), "application/pdf")},
                 data={"field": "payment_proof"},
             )
-        for response in (projects_response, transfers_response):
+            book_responses = [self.client.post(
+                "/api/entries/books/ocr",
+                files={"file": ("page.pdf", make_pdf_bytes(1), "application/pdf")},
+                data={"field": field},
+            ) for field in ("first_page", "title_page")]
+        for response in (projects_response, transfers_response, *book_responses):
             self.assertEqual(response.status_code, 200)
             events = self.events(response)
             self.assertEqual(events[-1]["type"], "result")

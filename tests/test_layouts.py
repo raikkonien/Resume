@@ -94,6 +94,7 @@ class TableLayoutTests(unittest.TestCase):
             ("projects", "begin_date", {"op": "range", "min": "2024-02-29", "max": "2026-10-11"}),
             ("memberships", "begin_month", {"op": "range", "min": "2024-12", "max": "2026-01"}),
             ("papers", "year", {"op": "range", "min": 1900, "max": 2100}),
+            ("software", "year", {"op": "range", "min": 1900, "max": 2100}),
             ("books", "word_count", {"op": "range", "min": 0, "max": 10}),
             ("projects", "amount", {"op": "range", "min": -0.5, "max": 1.5}),
         ]
@@ -130,6 +131,9 @@ class TableLayoutTests(unittest.TestCase):
             ("papers", "year", {"op": "range", "min": True, "max": 2026}),
             ("papers", "year", {"op": "range", "min": 2025.0, "max": 2026}),
             ("papers", "year", {"op": "range", "min": "2025", "max": 2026}),
+            ("software", "year", {"op": "range", "min": True, "max": 2026}),
+            ("software", "year", {"op": "range", "min": 1899, "max": 2026}),
+            ("software", "year", {"op": "range", "min": 2025, "max": 2101}),
             ("books", "word_count", {"op": "range", "min": 1.1, "max": 2}),
             ("projects", "amount", {"op": "range", "min": 2, "max": 1}),
             ("projects", "amount", {"op": "range", "min": float("inf"), "max": None}),
@@ -148,10 +152,11 @@ class TableLayoutTests(unittest.TestCase):
 
     def test_old_layout_drops_removed_fields_and_adds_new_fields_visible_at_end(self):
         current = SECTIONS["software"]
-        old_order = [field.key for field in current.fields if field.key != "reg_date"]
+        new_fields = [field.key for field in current.fields if field.key in {"reg_date", "year"}]
+        old_order = [field.key for field in current.fields if field.key not in new_fields]
         old_order.reverse()
         old = {"version": 1, "column_order": ["removed", *old_order],
-               "hidden_columns": ["removed", "reg_date", "holder"],
+               "hidden_columns": ["removed", *new_fields, "holder"],
                "sort": {"field": "removed", "direction": "asc"},
                "filters": {"removed": {"op": "contains", "value": "old"},
                            "name": {"op": "contains", "value": "  retained  "}}}
@@ -159,11 +164,34 @@ class TableLayoutTests(unittest.TestCase):
             self.conn.execute("INSERT INTO table_layouts VALUES (?, ?, ?)",
                               (self.owner, current.key, json.dumps(old)))
         loaded = self.layout(current)
-        self.assertEqual(loaded["column_order"], [*old_order, "reg_date"])
+        self.assertEqual(loaded["column_order"], [*old_order, *new_fields])
         self.assertEqual(loaded["hidden_columns"], ["holder"])
         self.assertIsNone(loaded["sort"])
         self.assertEqual(loaded["filters"], {"name": {"op": "contains", "value": "retained"}})
         self.assertEqual(db.save_table_layout(self.conn, current, self.owner, loaded), loaded)
+
+    def test_software_year_added_to_saved_layout_preserves_existing_preferences(self):
+        current = SECTIONS["software"]
+        old_order = [field.key for field in current.fields if field.key != "year"]
+        old_order.reverse()
+        old = {"version": 1, "column_order": old_order,
+               "hidden_columns": ["holder", "certificate"],
+               "sort": {"field": "reg_date", "direction": "desc"},
+               "filters": {"reg_date": {"op": "range", "min": "2024-01-01", "max": "2026-12-31"},
+                           "reg_number": {"op": "contains", "value": "2024SR"}}}
+        with self.conn:
+            self.conn.execute("INSERT INTO table_layouts VALUES (?, ?, ?)",
+                              (self.owner, current.key, json.dumps(old)))
+        db.init_db()
+        loaded = self.layout(current)
+        self.assertEqual(loaded, {**old, "column_order": [*old_order, "year"]})
+        self.assertEqual(db.get_table_layout(self.conn, current, self.other), db._default_layout(current))
+        loaded["sort"] = {"field": "year", "direction": "asc"}
+        loaded["filters"]["year"] = {"op": "range", "min": 2024, "max": 2026}
+        saved = db.save_table_layout(self.conn, current, self.owner, loaded)
+        db.init_db()
+        self.assertEqual(self.layout(current), saved)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM record_events").fetchone()[0], 0)
 
     def test_new_field_loaded_from_extended_metadata_is_visible(self):
         layout = self.layout()

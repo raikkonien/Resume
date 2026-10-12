@@ -110,7 +110,7 @@ ENTRY_SECTIONS = (
         Field("full_time", "是否全日制", "checkbox"),
         Field("degree_cert", "学位证书", "file", accept=DOC),
         Field("diploma_cert", "学历证书", "file", accept=DOC),
-    ), title_field="school", year_fields=("begin_date",)),
+    ), title_field="school", year_fields=("award_year",)),
     Section("papers", "文章", (
         Field("year", "年份", "year"),
         Field("journal", "杂志", "text"),
@@ -140,8 +140,9 @@ ENTRY_SECTIONS = (
         Field("apply_date", "专利申请日期", "date"),
         Field("rank", "本人排名", "rank"),
         Field("certificate", "专利证书", "file", accept=DOC),
-    ), title_field="name", year_fields=("grant_date", "apply_date")),
+    ), title_field="name", year_fields=("grant_date",)),
     Section("software", "软件著作", (
+        Field("year", "年份", "year"),
         Field("name", "软件名称", "text"),
         Field("holder", "著作权人", "text"),
         Field("reg_number", "登记号", "text"),
@@ -149,7 +150,7 @@ ENTRY_SECTIONS = (
         Field("cert_number", "证书号", "text"),
         Field("rank", "本人排名", "rank"),
         Field("certificate", "软件著作证书", "file", accept=DOC),
-    ), title_field="name", year_fields=("reg_date",)),
+    ), title_field="name", year_fields=("year",)),
     Section("projects", "课题", (
         Field("begin_date", "开始时间", "date"),
         Field("end_date", "结束时间", "date"),
@@ -189,6 +190,7 @@ ENTRY_SECTIONS = (
         Field("authors", "作者", "text"),
         Field("first_page", "书首页", "file", accept=DOC),
         Field("title_page", "书扉页", "file", accept=DOC),
+        Field("publishing_contract", "出版合同", "file", accept=DOC),
     ), title_field="title", year_fields=("pub_date",)),
     Section("memberships", "社会兼职", (
         Field("society", "学协会名称", "text"),

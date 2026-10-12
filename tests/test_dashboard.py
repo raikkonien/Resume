@@ -23,8 +23,8 @@ class BusinessYearTests(unittest.TestCase):
     def test_all_sections_use_their_business_date_once(self):
         expected = {
             "work": "begin_date", "contracts": "begin_date", "annual_reviews": "year",
-            "appointments": "begin_date", "positions": "begin_date", "education": "begin_date",
-            "papers": "year", "patents": "grant_date", "software": "reg_date",
+            "appointments": "begin_date", "positions": "begin_date", "education": "award_year",
+            "papers": "year", "patents": "grant_date", "software": "year",
             "projects": "begin_date", "transfers": "sign_date", "books": "pub_date",
             "memberships": "begin_month", "standards": "publish_date",
             "trainings": "begin_date", "conferences": "begin_date", "licenses": "begin_date",
@@ -32,41 +32,54 @@ class BusinessYearTests(unittest.TestCase):
         self.assertEqual([section.key for section in ENTRY_SECTIONS], list(expected))
         for key, field in expected.items():
             with self.subTest(section=key):
-                value = "2024" if field == "year" else (
+                value = "2024" if field in ("year", "award_year") else (
                     "2024-02" if field == "begin_month" else "2024-02-29")
-                row = {field: value, "end_date": "2026-01-01", "close_date": "2026-01-01",
-                       "award_year": 2026, "created_at": "2026-01-01T00:00:00+00:00"}
+                row = {"end_date": "2026-01-01", "close_date": "2026-01-01",
+                       "award_year": 2026, "created_at": "2026-01-01T00:00:00+00:00",
+                       field: value}
                 self.assertEqual(event_year(SECTIONS[key], row), 2024)
         self.assertIsNone(event_year(BASIC, {"birth_month": "2026-01"}))
 
     def test_strict_year_date_month_parsing_and_bounds(self):
-        for value in (None, "", " 2026", "2026 ", "2026extra", "2026-01-01", True, False,
-                      2026.0, "２０２６", "1899", 2101):
-            with self.subTest(year=value):
-                self.assertIsNone(event_year(SECTIONS["papers"], {"year": value}))
-        for value in (1900, "1900", 2100, "2100"):
-            self.assertEqual(event_year(SECTIONS["papers"], {"year": value}), int(value))
+        for key, field in (("papers", "year"), ("education", "award_year"), ("software", "year")):
+            for value in (None, "", " 2026", "2026 ", "2026extra", "2026-01-01", True, False,
+                          2026.0, "２０２６", "1899", 2101):
+                with self.subTest(section=key, year=value):
+                    self.assertIsNone(event_year(SECTIONS[key], {field: value}))
+            for value in (1900, "1900", 2100, "2100"):
+                with self.subTest(section=key, year=value):
+                    self.assertEqual(event_year(SECTIONS[key], {field: value}), int(value))
         for value in ("2026-02-29", "2026-13-01", "2026-01-32", "2026-1-01", "20261011",
                       "2026-01-01T00:00:00", "2026.01.01", "1899-01-01", "2101-01-01", True):
             with self.subTest(date=value):
-                self.assertIsNone(event_year(SECTIONS["software"], {"reg_date": value}))
+                self.assertIsNone(event_year(SECTIONS["work"], {"begin_date": value}))
         for value in ("2026-00", "2026-13", "2026-1", "2026-01-01", "2026.01", True):
             with self.subTest(month=value):
                 self.assertIsNone(event_year(SECTIONS["memberships"], {"begin_month": value}))
-        self.assertEqual(event_year(SECTIONS["software"], {"reg_date": "2024-02-29"}), 2024)
+        self.assertEqual(event_year(SECTIONS["work"], {"begin_date": "2024-02-29"}), 2024)
         self.assertEqual(event_year(SECTIONS["memberships"], {"begin_month": "2026-12"}), 2026)
 
-    def test_patent_priority_and_no_storage_or_number_year_guessing(self):
+    def test_patents_require_grant_date_and_never_fall_back_to_application_date(self):
         patents = SECTIONS["patents"]
         self.assertEqual(event_year(patents, {"grant_date": "2025-03-01", "apply_date": "2024-01-01"}), 2025)
+        self.assertIsNone(event_year(patents, {"apply_date": "2026-01-01"}))
         for invalid in (None, "", "2025-02-30", "2101-01-01", True):
-            self.assertEqual(event_year(patents, {"grant_date": invalid, "apply_date": "2026-01-01"}), 2026)
+            with self.subTest(grant_date=invalid):
+                self.assertIsNone(event_year(patents, {"grant_date": invalid, "apply_date": "2026-01-01"}))
+
+    def test_missing_years_do_not_use_other_dates_or_storage_and_identifier_years(self):
         for key in ("software", "standards", "education", "projects"):
-            self.assertIsNone(event_year(SECTIONS[key], {
-                "reg_number": "2026SR001", "number": "2026-01", "certificate_name": "2026.pdf",
-                "created_at": "2026-01-01", "end_date": "2026-01-01", "close_date": "2026-01-01",
-                "award_year": 2026,
-            }))
+            with self.subTest(section=key):
+                self.assertIsNone(event_year(SECTIONS[key], {
+                    "reg_number": "2026SR001", "number": "2026-01", "certificate_name": "2026.pdf",
+                    "created_at": "2026-01-01", "end_date": "2026-01-01", "close_date": "2026-01-01",
+                    "reg_date": "2026-01-01",
+                }))
+        self.assertIsNone(event_year(SECTIONS["education"], {"begin_date": "2026-01-01"}))
+        self.assertEqual(event_year(SECTIONS["education"], {
+            "award_year": 2026, "begin_date": "2024-01-01", "end_date": "2025-01-01",
+        }), 2026)
+        self.assertEqual(event_year(SECTIONS["software"], {"year": 2026, "reg_date": "2024-01-01"}), 2026)
 
 
 class DashboardTests(unittest.TestCase):
@@ -102,8 +115,9 @@ class DashboardTests(unittest.TestCase):
         applied = self.add("patents", {"name": "Applied", "apply_date": "2026-02-01"})
         project = self.add("projects", {"name": "Project", "begin_date": "2024-01-01",
                                         "end_date": "2026-01-01", "close_date": "2026-01-01"})
-        software = self.add("software", {"name": "Registered", "reg_date": "2026-03-01"})
-        undated = self.add("software", {"name": "Undated", "reg_number": "2026SR0001"})
+        software = self.add("software", {"name": "Registered", "year": 2026, "reg_date": "2024-03-01"})
+        undated = self.add("software", {"name": "Undated", "reg_number": "2026SR0001",
+                                        "reg_date": "2026-03-01"})
         review = self.add("annual_reviews", {"year": "2026"})
         archived = self.add("papers", {"year": 2026, "title": "Archived"})
         db.archive_row(self.conn, SECTIONS["papers"], archived, self.owner)
@@ -135,16 +149,16 @@ class DashboardTests(unittest.TestCase):
     def test_fixed_fixture_aggregates_owner_active_records_once(self):
         ids = self.fixture()
         payload = self.payload()
-        self.assertEqual(payload["current_total"], 4)
-        self.assertEqual(payload["undated_total"], 1)
+        self.assertEqual(payload["current_total"], 3)
+        self.assertEqual(payload["undated_total"], 2)
         self.assertEqual([s["key"] for s in payload["sections"]], [s.key for s in ENTRY_SECTIONS])
-        expected = {"papers": [1, 1, 1], "patents": [0, 1, 1], "projects": [1, 0, 0],
+        expected = {"papers": [1, 1, 1], "patents": [0, 1, 0], "projects": [1, 0, 0],
                     "software": [0, 0, 1], "annual_reviews": [0, 0, 1]}
         for section in payload["sections"]:
             self.assertEqual(set(section), {"key", "label", "current_count", "counts", "undated_count"})
             self.assertEqual(section["counts"], expected.get(section["key"], [0, 0, 0]))
             self.assertEqual(section["current_count"], section["counts"][2])
-            self.assertEqual(section["undated_count"], int(section["key"] == "software"))
+            self.assertEqual(section["undated_count"], int(section["key"] in ("patents", "software")))
         graph = payload["graph"]
         nodes = {node["id"]: node for node in graph["nodes"]}
         records = [node for node in nodes.values() if node["kind"] == "record"]
@@ -154,9 +168,10 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn(f"record:papers:{ids['foreign']}", nodes)
         self.assertNotIn("section:work", nodes)
         self.assertEqual(nodes["self"]["value"], 9)
-        self.assertEqual(nodes[f"record:software:{ids['undated']}"]["year"], None)
+        self.assertIsNone(nodes[f"record:software:{ids['undated']}"]["year"])
+        self.assertIsNone(nodes[f"record:patents:{ids['applied']}"]["year"])
         self.assertEqual({node["year"]: node["value"] for node in nodes.values() if node["kind"] == "year"},
-                         {2024: 2, 2025: 2, 2026: 4})
+                         {2024: 2, 2025: 2, 2026: 3})
         for node in nodes.values():
             self.assertEqual(set(node), {"id", "kind", "label", "section", "entry_id", "year", "value"})
         for edge in graph["edges"]:
@@ -172,7 +187,8 @@ class DashboardTests(unittest.TestCase):
                 self.assertEqual(section_edges[node["id"]], "self")
         year_edges = {edge["source"]: edge for edge in graph["edges"] if edge["kind"] == "year"}
         self.assertEqual(year_edges[f"record:patents:{ids['granted']}"]["evidence"], "patents.grant_date")
-        self.assertEqual(year_edges[f"record:patents:{ids['applied']}"]["evidence"], "patents.apply_date")
+        self.assertEqual(year_edges[f"record:software:{ids['software']}"]["evidence"], "software.year")
+        self.assertNotIn(f"record:patents:{ids['applied']}", year_edges)
         self.assertNotIn(f"record:software:{ids['undated']}", year_edges)
         encoded = json.dumps(payload)
         self.assertNotIn("user_id", encoded)
@@ -180,6 +196,86 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn("api_key", encoded)
         self.assertNotIn("Foreign", encoded)
         self.assertEqual(payload, self.payload())
+
+    def test_nine_business_fields_drive_counts_and_graph_without_date_substitution(self):
+        cases = {
+            "work": ("begin_date", ("end_date",)),
+            "appointments": ("begin_date", ("end_date",)),
+            "positions": ("begin_date", ()),
+            "education": ("award_year", ("begin_date", "end_date")),
+            "papers": ("year", ()),
+            "patents": ("grant_date", ("apply_date",)),
+            "projects": ("begin_date", ("end_date", "close_date")),
+            "trainings": ("begin_date", ("end_date",)),
+            "software": ("year", ("reg_date",)),
+        }
+        active = {}
+        excluded = []
+        for key, (field, other_dates) in cases.items():
+            year_field = field in ("year", "award_year")
+            current = 2026 if year_field else "2026-01-01"
+            historical = 2024 if year_field else "2024-01-01"
+            invalid = "2026extra" if year_field else "2026-02-30"
+            rows = (
+                ("current", {field: current}, "2024-01-01", 2026),
+                ("historical", {field: historical}, "2026-01-01", 2024),
+                ("missing", {}, "2026-01-01", None),
+                ("invalid", {field: invalid}, "2026-01-01", None),
+            )
+            for kind, values, other_date, expected_year in rows:
+                values.update({other_field: other_date for other_field in other_dates})
+                entry_id = self.add(key, values)
+                # A storage timestamp must not supply a missing business year or override one.
+                with self.conn:
+                    self.conn.execute(
+                        f'UPDATE "{key}" SET created_at = ? WHERE id = ? AND user_id = ?',
+                        (other_date + "T00:00:00+00:00", entry_id, self.owner),
+                    )
+                active[f"record:{key}:{entry_id}"] = (key, field, kind, expected_year)
+            archived = self.add(key, {field: current})
+            db.archive_row(self.conn, SECTIONS[key], archived, self.owner)
+            foreign = self.add(key, {field: current}, self.other)
+            excluded.extend((f"record:{key}:{archived}", f"record:{key}:{foreign}"))
+
+        payload = self.payload()
+        self.assertEqual(payload["current_total"], 9)
+        self.assertEqual(payload["undated_total"], 18)
+        sections = {section["key"]: section for section in payload["sections"]}
+        for key in cases:
+            with self.subTest(section=key):
+                self.assertEqual(sections[key]["counts"], [1, 0, 1])
+                self.assertEqual(sections[key]["current_count"], 1)
+                self.assertEqual(sections[key]["undated_count"], 2)
+        for key in sections.keys() - cases.keys():
+            self.assertEqual(sections[key]["counts"], [0, 0, 0])
+            self.assertEqual(sections[key]["undated_count"], 0)
+
+        nodes = {node["id"]: node for node in payload["graph"]["nodes"]}
+        self.assertEqual({node["id"] for node in nodes.values() if node["kind"] == "record"}, set(active))
+        self.assertEqual(nodes["self"]["value"], 36)
+        self.assertEqual({node["year"]: node["value"] for node in nodes.values() if node["kind"] == "year"},
+                         {2024: 9, 2026: 9})
+        year_edges = {edge["source"]: edge for edge in payload["graph"]["edges"] if edge["kind"] == "year"}
+        self.assertEqual(len(year_edges), 18)
+        for record_id, (key, field, kind, expected_year) in active.items():
+            with self.subTest(section=key, record=kind):
+                self.assertEqual(nodes[record_id]["value"], 1)
+                self.assertEqual(nodes[record_id]["year"], expected_year)
+                self.assertEqual(nodes[f"section:{key}"]["value"], 4)
+                if expected_year is None:
+                    self.assertNotIn(record_id, year_edges)
+                else:
+                    self.assertEqual(year_edges[record_id]["target"], f"year:{expected_year}")
+                    self.assertEqual(year_edges[record_id]["evidence"], f"{key}.{field}")
+        for record_id in excluded:
+            self.assertNotIn(record_id, nodes)
+
+        client = http_client(self, "admin")
+        with patch.object(dashboard, "datetime") as clock:
+            clock.now.return_value = datetime(2026, 10, 11, tzinfo=timezone(timedelta(hours=8)))
+            response = client.get("/api/dashboard?user_id=" + str(self.other))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), payload)
 
     def test_year_boundary_and_old_records_remain_in_graph(self):
         self.fixture()
@@ -190,9 +286,9 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(payload["current_total"], 0)
         sections = {section["key"]: section for section in payload["sections"]}
         self.assertEqual(sections["papers"]["counts"], [1, 1, 0])
-        self.assertEqual(sections["patents"]["counts"], [1, 1, 0])
+        self.assertEqual(sections["patents"]["counts"], [1, 0, 0])
         self.assertEqual(sections["projects"]["counts"], [0, 0, 0])
-        self.assertEqual(payload["undated_total"], 1)
+        self.assertEqual(payload["undated_total"], 2)
         nodes = {node["id"] for node in payload["graph"]["nodes"]}
         self.assertTrue({f"record:papers:{old}", f"record:papers:{future}", "year:1900", "year:2100"} <= nodes)
 

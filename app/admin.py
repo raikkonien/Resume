@@ -213,7 +213,8 @@ async def recognize_entry(request: Request, section: str):
         field.key == source_field and field.type == "file" for field in schema.fields
     )):
         error = "附件字段无效"
-    elif section == "projects" and source_field != "contract":
+    elif ((section == "projects" and source_field != "contract")
+          or (section == "books" and source_field == "publishing_contract")):
         error = "该附件不支持自动识别，请手动填写"
     if error is not None:
         await form_cm.__aexit__(None, None, None)
