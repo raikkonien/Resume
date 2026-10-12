@@ -455,7 +455,7 @@ def _call_model(
     model = (settings.get("model") or "").strip()
     api_key = (settings.get("api_key") or "").strip()
     if not endpoint or not model:
-        raise ValueError("OCR 识别服务尚未配置，请先在设置中填写接口地址和模型名称")
+        raise ValueError("文档识别模型尚未配置，请前往 /settings#model 填写接口地址和模型名称；仍可手工录入并保存")
 
     headers = {"Content-Type": "application/json"}
     if api_key:

@@ -92,6 +92,28 @@ class DateMonthYearNormalizationTests(unittest.TestCase):
         self.assertIsNone(_normalize_year("未注明"))
         self.assertIsNone(_normalize_year("2020-2021"))
 
+    def test_business_dates_require_an_explicit_valid_model_value(self):
+        for section_key, key, number_key in (
+            ("software", "reg_date", "reg_number"),
+            ("standards", "publish_date", "number"),
+        ):
+            fields = list(SECTIONS[section_key].fields)
+            with self.subTest(section=section_key):
+                values, warnings = _normalize_fields(
+                    {"fields": {key: "2026年10月11日", number_key: "2024-REG-123"}},
+                    fields, None, None,
+                )
+                self.assertEqual(values[key], "2026-10-11")
+                values, warnings = _normalize_fields(
+                    {"fields": {key: "2026-02-29", number_key: "2024-REG-123"}},
+                    fields, None, None,
+                )
+                self.assertNotIn(key, values)
+                self.assertIn(key, warnings)
+                values, _ = _normalize_fields({"fields": {number_key: "2024-REG-123"}},
+                                              fields, None, None)
+                self.assertNotIn(key, values)
+
 
 class NormalizeFieldSelectAndUnknownTypeTests(unittest.TestCase):
     def test_select_rejects_value_outside_options_with_warning(self):

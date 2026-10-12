@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% from "macros.html" import icon %}
+{% block title %}首页 · 个人简历{% endblock %}
+{% block scripts %}{% if asset_versions.get('dashboard.js') %}<script src="{{ url_for('static', path='vendor/echarts-5.6.0.min.js') }}?v={{ asset_versions['vendor/echarts-5.6.0.min.js'] }}" defer></script><script type="module" src="{{ url_for('static', path='dashboard.js') }}?v={{ asset_versions['dashboard.js'] }}"></script>{% endif %}{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">个人资料工作台</p><h1>首页</h1></div><a class="button-link" href="/resume">编辑简历 {{ icon('edit') }}</a></div>
+<p id="dashboard-error" class="notice error" role="alert" hidden>首页数据加载失败。<button type="button" id="dashboard-retry">重试</button></p>
+<div id="dashboard-content" aria-busy="true">
+<div class="dashboard-top">
+<section class="card graph-card"><div class="panel-heading"><div><h2>履历星座图</h2><p class="muted">栏目、记录与业务年份的真实关系</p></div><div class="chart-actions"><button type="button" id="graph-reset">重置视图</button><button type="button" id="graph-expand" class="icon-button" aria-label="放大星座图" title="放大星座图">{{ icon('expand') }}</button></div></div>
+<label class="inline-check"><input type="checkbox" id="graph-relations">作者 / 单位关联</label>
+<div id="constellation" class="chart chart-graph skeleton" role="img" aria-label="履历星座图"></div>
+<p id="graph-empty" class="empty" hidden>添加记录后生成星座图。<a href="/resume">前往简历</a></p>
+<p class="chart-note">滚轮缩放、拖动平移；悬停暂停旋转并显示关联线流动。实线：栏目与记录；虚线：业务年份。作者 / 单位按填写文本匹配，不代表已核验同名身份。</p><div id="graph-legend" class="chart-legend"></div>
+</section>
+<section class="card recent-card"><div class="panel-heading"><h2>最近修改</h2><span class="muted">最近 10 条</span></div><ol id="recent-events" class="recent-events"></ol><p id="recent-empty" class="empty" hidden>后续修改将在这里显示</p></section>
+</div>
+<section class="card annual-card"><div class="panel-heading"><h2 id="current-year-title">当年记录</h2><span class="annual-total"><strong id="current-total">—</strong> 条</span></div><div id="current-counts" class="current-counts"></div><div id="annual-share" class="chart chart-share skeleton" role="img" aria-label="当年记录栏目占比"></div><p id="annual-empty" class="empty" hidden>当年暂无记录</p><p id="undated-summary" class="chart-note"></p></section>
+<section class="card history-card"><div class="panel-heading"><h2>近三年数量</h2><span class="muted">按业务发生年份计一次</span></div><div class="chart-scroll"><div id="annual-counts" class="chart chart-counts skeleton" role="img" aria-label="近三年各栏目堆叠数量"></div></div></section>
+<details class="card dashboard-data"><summary>查看数据与键盘定位入口</summary><div id="dashboard-data-table" class="table-wrap"></div><div id="graph-record-links" class="record-links"></div></details>
+</div>
+<dialog id="graph-dialog" class="graph-dialog" aria-labelledby="graph-dialog-title"><header class="dialog-header"><h2 id="graph-dialog-title">履历星座图</h2><div id="graph-expanded-actions" class="chart-actions"><button type="button" id="graph-dialog-close" class="icon-button quiet" aria-label="关闭放大星座图" title="关闭">{{ icon('close') }}</button></div></header><div id="constellation-expanded" class="chart"></div></dialog>
+{% endblock %}

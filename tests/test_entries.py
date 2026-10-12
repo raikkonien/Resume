@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 import os
 import shutil
 import sqlite3
@@ -12,7 +13,7 @@ os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
 os.environ.setdefault("MCP_TOKEN", "test-mcp-token")
 
 from app import db
-from app.sections import SECTIONS, Section, parse_form
+from app.sections import BASIC, ENTRY_SECTIONS, SECTIONS, Section, event_year, parse_form, record_label
 
 from support import ADMIN_TEST_PASSWORD, original_user_id
 
@@ -81,14 +82,14 @@ class EntryStorageTests(unittest.TestCase):
             rows = db.list_rows(conn, self.section, self.user_id)
         self.assertEqual([row["id"] for row in rows], reordered)
 
-    def test_deletion_then_insertion_appends_after_remaining_rows(self):
+    def test_archive_then_insertion_appends_after_remaining_active_rows(self):
         db.init_db()
         with self.open_db() as conn:
             ids = [db.insert_row(conn, self.section, {"employer": f"E{i}"}, self.user_id) for i in range(3)]
         with self.open_db() as conn:
             db.reorder_rows(conn, self.section, [ids[2], ids[0], ids[1]], self.user_id)
         with self.open_db() as conn:
-            db.delete_row(conn, self.section, ids[0], self.user_id)
+            db.archive_row(conn, self.section, ids[0], self.user_id)
         with self.open_db() as conn:
             new_id = db.insert_row(conn, self.section, {"employer": "New"}, self.user_id)
 
@@ -117,6 +118,152 @@ class EntryStorageTests(unittest.TestCase):
         with self.open_db() as conn:
             rows = db.list_rows(conn, self.section, self.user_id)
         self.assertEqual([row["id"] for row in rows], ids)
+
+    def test_archive_preserves_row_and_file_restore_uses_same_id_at_active_tail(self):
+        db.init_db()
+        owner = self.user_id
+        projects = SECTIONS["projects"]
+        with self.open_db() as conn:
+            first = db.insert_row(conn, projects, {"name": "First", "contract": "projects/1/contract.pdf",
+                                                  "contract_name": "原附件.pdf"}, owner)
+            second = db.insert_row(conn, projects, {"name": "Second"}, owner)
+            user = db.get_user(conn, owner)
+            attachment = self.tmp_dir / user["username"] / "projects" / "1" / "contract.pdf"
+            attachment.parent.mkdir(parents=True)
+            attachment.write_bytes(b"%PDF-original")
+            before = db.get_row(conn, projects, first, owner)
+            db.archive_row(conn, projects, first, owner)
+            self.assertEqual([row["id"] for row in db.list_rows(conn, projects, owner)], [second])
+            self.assertIsNone(db.get_row(conn, projects, first, owner))
+            archived = db.list_rows(conn, projects, owner, archived=True)
+            self.assertEqual([row["id"] for row in archived], [first])
+            self.assertIsNotNone(archived[0]["archived_at"])
+            for key, value in before.items():
+                if key != "archived_at":
+                    self.assertEqual(archived[0][key], value)
+            self.assertEqual(attachment.read_bytes(), b"%PDF-original")
+            with self.assertRaises(ValueError):
+                db.archive_row(conn, projects, first, owner)
+            with self.assertRaises(ValueError):
+                db.reorder_rows(conn, projects, [first, second], owner)
+            third = db.insert_row(conn, projects, {"name": "Third"}, owner)
+            db.restore_row(conn, projects, first, owner)
+            self.assertEqual([row["id"] for row in db.list_rows(conn, projects, owner)], [second, third, first])
+            self.assertEqual(db.get_row(conn, projects, first, owner)["contract"], before["contract"])
+            self.assertEqual(db.list_rows(conn, projects, owner, archived=True), [])
+            self.assertEqual(attachment.read_bytes(), b"%PDF-original")
+            with self.assertRaises(ValueError):
+                db.restore_row(conn, projects, first, owner)
+
+    def test_archiving_restoring_and_scoped_inclusion_cannot_target_another_owner(self):
+        db.init_db()
+        owner = self.user_id
+        with self.open_db() as conn:
+            other = db.create_user(conn, "colleague", "colleague-password")["id"]
+            row_id = db.insert_row(conn, self.section, {"employer": "Private"}, owner)
+            for operation in (db.archive_row, db.restore_row):
+                with self.assertRaises(ValueError):
+                    operation(conn, self.section, row_id, other)
+            db.archive_row(conn, self.section, row_id, owner)
+            self.assertIsNone(db.get_row(conn, self.section, row_id, other, include_archived=True))
+            self.assertEqual(db.list_rows(conn, self.section, other, archived=True), [])
+            for operation in (db.archive_row, db.restore_row):
+                with self.assertRaises(ValueError):
+                    operation(conn, BASIC, db.get_basic(conn, owner)["id"], owner)
+            self.assertEqual(db.list_rows(conn, BASIC, owner, archived=True), [])
+
+    def test_events_only_record_completed_creates_actual_changes_and_forced_file_replacements(self):
+        db.init_db()
+        owner = self.user_id
+        with self.open_db() as conn:
+            discarded = db.insert_row(conn, self.section, {"employer": "Failed upload"}, owner)
+            db._discard_new_row(conn, self.section, discarded, owner)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM record_events").fetchone()[0], 0)
+            row_id = db.insert_row(conn, self.section, {"employer": "First"}, owner)
+            db.update_row(conn, self.section, row_id, {"employer": "First"}, owner, activity_action="create")
+            db.update_row(conn, self.section, row_id, {"employer": "First"}, owner)
+            db.update_row(conn, self.section, row_id, {}, owner)
+            db.update_row(conn, self.section, row_id, {"employer": "Changed"}, owner)
+            db.update_row(conn, self.section, row_id, {"employer": "Changed"}, owner, force_activity=True)
+            other = db.create_user(conn, "colleague", "colleague-password")["id"]
+            db.update_row(conn, self.section, row_id, {"employer": "Foreign"}, other, force_activity=True)
+            db.update_row(conn, self.section, 999, {}, owner, activity_action="create")
+            db.reorder_rows(conn, self.section, [row_id], owner)
+            second = db.insert_row(conn, self.section, {"employer": "Second"}, owner)
+            db.reorder_rows(conn, self.section, [second, row_id], owner)
+            db.reorder_rows(conn, self.section, [second, row_id], owner)
+            db.archive_row(conn, self.section, row_id, owner)
+            db.restore_row(conn, self.section, row_id, owner)
+            basic = db.get_basic(conn, owner)
+            db.update_row(conn, BASIC, basic["id"], {"name": "Person", "photo": "basic/photo.png"}, owner)
+            db.update_row(conn, BASIC, basic["id"], {"photo": None}, owner)
+            events = [dict(row) for row in conn.execute("SELECT * FROM record_events ORDER BY id")]
+            self.assertEqual([row["action"] for row in events],
+                             ["create", "update", "update", "reorder", "archive", "restore", "update", "update"])
+            self.assertEqual([row["title"] for row in events],
+                             ["First", "Changed", "Changed", self.section.label, "Changed", "Changed",
+                              "个人基本信息", "个人基本信息"])
+            self.assertIsNone(events[3]["entry_id"])
+            for row in events:
+                self.assertEqual(row["user_id"], owner)
+                self.assertEqual(datetime.fromisoformat(row["occurred_at"]).tzinfo, timezone.utc)
+            self.assertIsNone(db.get_row(conn, self.section, discarded, owner))
+
+    def test_event_write_failure_rolls_back_record_update_archive_restore_and_reorder(self):
+        db.init_db()
+        owner = self.user_id
+        with self.open_db() as conn:
+            first = db.insert_row(conn, self.section, {"employer": "Original"}, owner)
+            second = db.insert_row(conn, self.section, {"employer": "Second"}, owner)
+            conn.execute(
+                "CREATE TRIGGER fail_events BEFORE INSERT ON record_events "
+                "BEGIN SELECT RAISE(ABORT, 'event failure'); END"
+            )
+            for operation in (
+                lambda: db.update_row(conn, self.section, first, {"employer": "Must roll back"}, owner),
+                lambda: db.archive_row(conn, self.section, first, owner),
+                lambda: db.reorder_rows(conn, self.section, [second, first], owner),
+            ):
+                with self.assertRaises(sqlite3.IntegrityError):
+                    operation()
+            self.assertEqual(db.get_row(conn, self.section, first, owner)["employer"], "Original")
+            self.assertEqual([row["id"] for row in db.list_rows(conn, self.section, owner)], [first, second])
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM record_events").fetchone()[0], 0)
+            conn.execute("DROP TRIGGER fail_events")
+            db.archive_row(conn, self.section, first, owner)
+            conn.execute(
+                "CREATE TRIGGER fail_events BEFORE INSERT ON record_events "
+                "BEGIN SELECT RAISE(ABORT, 'event failure'); END"
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.restore_row(conn, self.section, first, owner)
+            self.assertIsNone(db.get_row(conn, self.section, first, owner))
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM record_events").fetchone()[0], 1)
+
+    def test_new_business_date_migration_does_not_invent_historical_years(self):
+        db.init_db()
+        owner = self.user_id
+        originals = {}
+        with self.open_db() as conn:
+            for key, new_field in (("software", "reg_date"), ("standards", "publish_date")):
+                current = SECTIONS[key]
+                old = Section(key, current.label, tuple(field for field in current.fields if field.key != new_field))
+                conn.execute(f'DROP TABLE "{key}"')
+                db._create_section(conn, old, key)
+                id = db.insert_row(conn, old, {"name": "Undated historical record"}, owner)
+                originals[key] = (id, db.get_row(conn, old, id, owner))
+        db.init_db()
+        with self.open_db() as conn:
+            for key, new_field in (("software", "reg_date"), ("standards", "publish_date")):
+                id, before = originals[key]
+                row = db.get_row(conn, SECTIONS[key], id, owner)
+                self.assertIsNone(row[new_field])
+                self.assertIsNone(event_year(SECTIONS[key], row))
+                for field, value in before.items():
+                    self.assertEqual(row[field], value)
+                parsed = parse_form(SECTIONS[key], {new_field: "2026-10-11"})
+                db.update_row(conn, SECTIONS[key], id, parsed, owner)
+                self.assertEqual(event_year(SECTIONS[key], db.get_row(conn, SECTIONS[key], id, owner)), 2026)
 
 class PaperStorageTests(unittest.TestCase):
     def setUp(self):
@@ -203,6 +350,44 @@ class PaperStorageTests(unittest.TestCase):
             self.assertIsNone(conn.execute("SELECT authors FROM papers WHERE id = ?", (row_id,)).fetchone()[0])
             self.assertEqual(db.list_rows(conn, self.papers, owner), [after])
 
+
+
+class BusinessYearTests(unittest.TestCase):
+    def test_dates_are_strict_and_priority_is_business_year_not_storage_or_end_year(self):
+        cases = [
+            ("papers", {"year": 2026}, 2026),
+            ("papers", {"year": "2026"}, 2026),
+            ("annual_reviews", {"year": "2026"}, 2026),
+            ("patents", {"grant_date": "2025-02-28", "apply_date": "2024-01-01"}, 2025),
+            ("patents", {"grant_date": "2025-02-29", "apply_date": "2026-01-01"}, 2026),
+            ("patents", {"grant_date": "2025-not-a-date", "apply_date": ""}, None),
+            ("projects", {"begin_date": "2024-12-31", "end_date": "2026-01-01", "close_date": "2026-02-02"}, 2024),
+            ("education", {"award_year": 2026, "end_date": "2026-01-01"}, None),
+            ("memberships", {"begin_month": "2025-12"}, 2025),
+            ("memberships", {"begin_month": "2025-13"}, None),
+            ("software", {"reg_number": "2026xyz", "created_at": "2026-10-11"}, None),
+            ("software", {"reg_date": "2026-10-11"}, 2026),
+            ("standards", {"publish_date": "2026-10-11"}, 2026),
+            ("basic", {"birth_month": "2000-01"}, None),
+        ]
+        for key, row, expected in cases:
+            with self.subTest(key=key, row=row):
+                self.assertEqual(event_year(SECTIONS[key], row), expected)
+        for value in (True, 2026.0, "2026x", "2026-01-01", " 2026", 1899, 2101, None, ""):
+            with self.subTest(value=value):
+                self.assertIsNone(event_year(SECTIONS["papers"], {"year": value}))
+        for value in ("2026-1-01", "2026-01-1", "2026-04-31", "2026-01-01junk", "2101-01-01", "1899-12-31"):
+            with self.subTest(value=value):
+                self.assertIsNone(event_year(SECTIONS["work"], {"begin_date": value}))
+
+    def test_record_labels_and_metadata_cover_every_section(self):
+        self.assertEqual(record_label(BASIC, {"name": "Person"}), "个人基本信息")
+        for section in ENTRY_SECTIONS:
+            self.assertIn(section.title_field, {field.key for field in section.fields})
+            self.assertTrue(section.year_fields)
+            self.assertEqual(record_label(section, {"id": 7}), f"{section.label} #7")
+            self.assertEqual(record_label(section, {section.title_field: "  Title  ", "id": 7}), "Title")
+            self.assertEqual(len(record_label(section, {section.title_field: "长" * 121})), 120)
 
 
 if __name__ == "__main__":

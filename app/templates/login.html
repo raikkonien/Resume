@@ -4,7 +4,7 @@
 <section class="login-panel">
   <p class="eyebrow">PRIVATE RESUME</p>
   <h1>你的经历，<br>妥善收录。</h1>
-  <p class="muted">使用个人账号登录，查看与维护自己的简历。</p>
+  <p class="muted">每个账号独立管理资料与模型配置。</p>
   <form method="post" action="/login">
     <input type="hidden" name="next" value="{{ next }}">
     <label for="username">用户名</label>
@@ -14,6 +14,6 @@
     {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
     <button class="primary" type="submit">进入资料库 <span aria-hidden="true">→</span></button>
   </form>
-  <p class="login-note">每个账号独立保存资料 · 管理员负责账号与 OCR 设置</p>
+  <p class="login-note">私有简历资料库 · 账号由部署端创建</p>
 </section>
 {% endblock %}

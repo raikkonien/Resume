@@ -86,21 +86,22 @@ jobs:
                   time.sleep(1)
               raise RuntimeError("Health endpoint did not become ready")
 
-          def admin_page(base):
-              with client.open(base + "/admin", timeout=10) as response:
-                  if response.status != 200 or urllib.parse.urlsplit(response.geturl()).path != "/admin":
-                      raise RuntimeError("Administrator session was not accepted")
-                  response.read()
+          def workspace_pages(base):
+              for path in ("/", "/resume", "/settings"):
+                  with client.open(base + path, timeout=10) as response:
+                      if response.status != 200 or urllib.parse.urlsplit(response.geturl()).path != path:
+                          raise RuntimeError("Workspace session was not accepted")
+                      response.read()
 
           def login(base, password):
               payload = urllib.parse.urlencode({"username": "admin", "password": password}).encode()
               with client.open(base + "/login", data=payload, timeout=10) as response:
-                  if response.status != 200 or urllib.parse.urlsplit(response.geturl()).path != "/admin":
-                      raise RuntimeError("Administrator login failed")
+                  if response.status != 200 or urllib.parse.urlsplit(response.geturl()).path != "/":
+                      raise RuntimeError("Initial account login failed")
                   response.read()
               if not any(cookie.name == "resume_session" for cookie in cookies):
                   raise RuntimeError("Login did not issue a session cookie")
-              admin_page(base)
+              workspace_pages(base)
 
           def key_fingerprint():
               # Read inside the container so host file ownership is irrelevant; never print the key.
@@ -114,9 +115,10 @@ jobs:
               users = json.loads(docker("exec", container, "python", "-c",
                                  "import json, sqlite3; "
                                  "db = sqlite3.connect('file:/data/resume.db?mode=ro', uri=True); "
-                                 "print(json.dumps(db.execute('SELECT username, role FROM users ORDER BY id').fetchall()))"))
-              if users != [["admin", "admin"]]:
-                  raise RuntimeError("Fresh installation must contain only the administrator")
+                                 "assert 'role' not in [row[1] for row in db.execute('PRAGMA table_info(users)')]; "
+                                 "print(json.dumps(db.execute('SELECT username FROM users ORDER BY id').fetchall()))"))
+              if users != [["admin"]]:
+                  raise RuntimeError("Fresh installation must contain only the initial account")
 
           pattern = r"初始密码（仅显示一次）：(\S+)"
           base = start()
@@ -128,7 +130,7 @@ jobs:
           check_users()
           login(base, password)
           first_key = key_fingerprint()
-          print("Fresh no-env boot, administrator-only database, and login passed.")
+          print("Fresh no-env boot, initial-account-only database, and workspace login passed.")
 
           docker("rm", "--force", container)
           base = start()
@@ -137,10 +139,10 @@ jobs:
           if key_fingerprint() != first_key:
               raise RuntimeError("Session key changed after container recreation")
           check_users()
-          admin_page(base)  # The original cookie must still authenticate after recreation.
+          workspace_pages(base)  # The original cookie must still authenticate after recreation.
           cookies.clear()
           login(base, password)  # The original password must still work for a new session.
-          print("Recreation preserved the session key, existing session, and administrator password.")
+          print("Recreation preserved the session key, existing session, and initial account password.")
           PY
 
       - name: Clean up disposable smoke state

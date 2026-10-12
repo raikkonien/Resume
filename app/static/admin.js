@@ -1,32 +1,16 @@
-"use strict";
-
-let saving = 0;
-
-function activate(key, focus = false) {
-  const tabs = [...document.querySelectorAll(".tab")];
-  const selected = tabs.find((tab) => tab.dataset.target === key) || tabs[0];
-  if (!selected) return;
-  for (const tab of tabs) {
-    const active = tab === selected;
-    tab.classList.toggle("active", active);
-    tab.setAttribute("aria-selected", String(active));
-    tab.tabIndex = active ? 0 : -1;
-    document.getElementById(`tab-${tab.dataset.target}`).classList.toggle("active", active);
-  }
-  const strip = selected.parentElement;
-  if (strip.scrollWidth > strip.clientWidth) {
-    strip.scrollLeft += selected.getBoundingClientRect().left - strip.getBoundingClientRect().left;
-  }
-  if (focus) selected.focus();
-}
+const panelLocks = new WeakMap();
+const panelMutations = new Map();
 
 function status(node, message, error = false) {
+  if (!node) return;
   node.textContent = message;
   node.classList.toggle("error", error);
 }
 
 async function request(url, options = {}) {
   const response = await fetch(url, {
+    credentials: "same-origin",
+    cache: "no-store",
     ...options,
     headers: { ...options.headers, "X-Requested-With": "fetch" },
   });
@@ -42,15 +26,22 @@ async function request(url, options = {}) {
 
 function syncControls(panel) {
   const busy = panel.dataset.busy === "true";
-  const editor = panel.querySelector("form.entry");
-  panel.querySelector(".btn-add").disabled = busy || !!editor;
-  for (const row of panel.querySelectorAll(".entry-table tbody tr")) {
-    for (const control of row.querySelectorAll("button")) {
-      const boundary = (control.dataset.direction === "-1" && !row.previousElementSibling)
-        || (control.dataset.direction === "1" && !row.nextElementSibling);
-      control.disabled = busy || !!editor || boundary;
+  const dialog = panel.querySelector("#entry-dialog");
+  const editor = dialog?.querySelector("form.entry");
+  let locks = panelLocks.get(panel);
+  if (busy || dialog?.open) {
+    if (!locks) panelLocks.set(panel, locks = new Map());
+    for (const control of panel.querySelectorAll("[data-editor-trigger], .entry-table tbody button")) {
+      if (!locks.has(control)) locks.set(control, control.disabled);
+      control.disabled = true;
     }
+  } else if (locks) {
+    for (const [control, disabled] of locks) {
+      if (control.isConnected) control.disabled = disabled;
+    }
+    panelLocks.delete(panel);
   }
+  for (const button of dialog?.querySelectorAll(".editor-close") || []) button.disabled = busy;
   if (editor) {
     for (const control of editor.elements) control.disabled = busy;
     editor.setAttribute("aria-busy", String(busy));
@@ -61,69 +52,45 @@ function syncControls(panel) {
   }
 }
 
-async function perform(panel, action) {
-  if (panel.dataset.busy === "true") return;
+export async function mutatePanel(panel, action) {
+  if (panel.dataset.busy === "true") throw new Error("栏目正在保存，请稍后重试");
   panel.dataset.busy = "true";
-  saving += 1;
   syncControls(panel);
-  status(panel.querySelector(".panel-status"), "");
-  let focusTarget;
+  panel.dispatchEvent(new Event("panel-state-change"));
+  const pending = (async () => {
+    try {
+      return await action();
+    } finally {
+      delete panel.dataset.busy;
+      syncControls(panel);
+      panel.dispatchEvent(new Event("panel-state-change"));
+    }
+  })();
+  panelMutations.set(panel, pending);
   try {
-    focusTarget = await action();
+    return await pending;
+  } finally {
+    panelMutations.delete(panel);
+  }
+}
+
+export function hasPendingPanelMutations() { return panelMutations.size > 0; }
+export async function waitForPanelMutations() {
+  await Promise.allSettled([...panelMutations.values()]);
+}
+
+async function perform(panel, action) {
+  status(panel.querySelector(".panel-status"), "");
+  try {
+    await mutatePanel(panel, action);
+    return true;
   } catch (error) {
     const message = panel.querySelector("form.entry .status") || panel.querySelector(".panel-status");
     status(message, `操作失败：${error.message}`, true);
-  } finally {
-    delete panel.dataset.busy;
-    saving -= 1;
-    syncControls(panel);
+    return false;
   }
-  focusTarget?.focus();
 }
 
-async function replaceTable(panel, response) {
-  const holder = document.createElement("template");
-  holder.innerHTML = (await response.text()).trim();
-  const list = panel.querySelector(".entry-list");
-  const scrollLeft = list.querySelector(".table-wrap")?.scrollLeft || 0;
-  list.replaceWith(holder.content.firstElementChild);
-  const scroller = panel.querySelector(".table-wrap");
-  if (scroller) scroller.scrollLeft = scrollLeft;
-}
-
-function rowButton(panel, id) {
-  return panel.querySelector(`tr[data-id="${id}"] .btn-edit`) || panel.querySelector(".btn-add");
-}
-
-async function openEditor(panel, url, id = "") {
-  await perform(panel, async () => {
-    const response = await request(url);
-    const editor = panel.querySelector(".entry-editor");
-    editor.innerHTML = await response.text();
-    for (const authors of editor.querySelectorAll(".authors-editor")) syncAuthors(authors);
-    editor.dataset.returnId = id;
-    return editor.querySelector("input, select, textarea");
-  });
-}
-
-async function moveRow(panel, row, position) {
-  const rows = [...panel.querySelectorAll(".entry-table tbody tr")];
-  const current = rows.indexOf(row);
-  if (current === position) return;
-  const ids = rows.map((item) => Number(item.dataset.id));
-  ids.splice(position, 0, ids.splice(current, 1)[0]);
-  const section = panel.querySelector(".entry-list").dataset.section;
-  await perform(panel, async () => {
-    const response = await request(`/admin/${section}/reorder`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids }),
-    });
-    await replaceTable(panel, response);
-    status(panel.querySelector(".panel-status"), "顺序已保存，展示页已同步。");
-    return rowButton(panel, row.dataset.id);
-  });
-}
 
 function acceptedExtensions(input) {
   return (input.accept || "").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
@@ -326,7 +293,12 @@ async function triggerSavedOcr(panel, form, zone) {
     status(zone.querySelector(".ocr-status"), problem, true);
     return;
   }
-  if (!confirm("重新识别当前已保存 PDF 的首页？\n识别结果将替换识别到的字段；已识别作者列表整体替换，请核对单位及作者身份。\n未识别到的内容、空作者列表、中科院/JCR 分区及识别期间手动修改的字段不会覆盖当前输入。\n结果仅写入当前编辑草稿，核对后点击「保存记录」才会保存。")) return;
+  if (!(await confirmAction({
+    title: "重新识别已保存 PDF",
+    message: "重新识别当前已保存 PDF 的首页？\n识别结果将替换明确识别到的字段及非空作者列表，请核对单位和作者身份。\n未识别内容、中科院/JCR 分区及识别期间手动修改的字段保持不变。\n结果仅写入当前编辑草稿，核对后点击「保存记录」才会保存。",
+    confirmLabel: "重新识别",
+  }))) return;
+  if (!form.isConnected || !form.closest("dialog")?.open) return;
   await triggerOcr(panel, form, zone, null);
 }
 
@@ -558,7 +530,6 @@ async function submitOcrSettings(form, testing) {
   if (testing) invalidateOcrTest(form);
   else payload.test_token = form.dataset.testToken;
   form.dataset.busy = "true";
-  saving += 1;
   syncSettingsControls(form);
   status(statusNode, testing ? "正在测试接口与图像识别能力…" : "保存中…");
   try {
@@ -573,6 +544,7 @@ async function submitOcrSettings(form, testing) {
         status(statusNode, "配置已变更，请重新测试。", true);
         return;
       }
+      if (typeof data.test_token !== "string" || !data.test_token) throw new Error("测试未返回有效凭证，请重新测试");
       form.dataset.testToken = data.test_token;
       status(statusNode, "测试通过，接口和图像识别正常。请在 10 分钟内保存设置。");
     } else {
@@ -589,272 +561,385 @@ async function submitOcrSettings(form, testing) {
     status(statusNode, `${testing ? "测试" : "保存"}失败：${error.message}`, true);
   } finally {
     delete form.dataset.busy;
-    saving -= 1;
     syncSettingsControls(form);
   }
 }
 
-document.addEventListener("click", async (event) => {
-  const button = event.target.closest(".btn-test-ocr");
-  if (button && !button.disabled) await submitOcrSettings(button.form, true);
-});
+const editorControllers = new WeakMap();
+const modelControllers = new WeakMap();
+let confirmationQueue = Promise.resolve();
+let confirmationDialog;
 
-document.addEventListener("input", (event) => {
-  const settingsForm = event.target.closest("#ocr-settings-form");
-  if (settingsForm) {
-    settingsForm.dataset.dirty = "true";
-    invalidateOcrTest(settingsForm);
-    status(settingsForm.querySelector(".panel-status"), "配置已修改，请重新测试后保存。");
-    return;
-  }
-  const form = event.target.closest("form.entry");
-  if (!form) return;
-  const authors = event.target.closest(".authors-editor");
-  if (authors) syncAuthors(authors, true);
-  else if (event.target.matches(".dotted-date-display")) markControlEdited(editDottedDate(event.target));
-  else if (event.target.type !== "file") {
-    syncDottedDate(event.target);
-    markControlEdited(event.target);
-  }
-  form.dataset.dirty = "true";
-  status(form.querySelector(".status"), "有未保存的修改");
-});
-
-document.addEventListener("submit", async (event) => {
-  const settingsForm = event.target.closest("#ocr-settings-form");
-  if (!settingsForm) return;
-  event.preventDefault();
-  await submitOcrSettings(settingsForm, false);
-});
-
-document.addEventListener("submit", async (event) => {
-  const form = event.target.closest("form.entry");
-  if (!form) return;
-  event.preventDefault();
-  const panel = form.closest(".tab-panel");
-  if (panel.dataset.busy === "true" || form._activeOcrZones?.size) return;
-  for (const authors of form.querySelectorAll(".authors-editor")) syncAuthors(authors);
-  const body = new FormData(form);
-  await perform(panel, async () => {
-    status(form.querySelector(".status"), "保存中…");
-    const response = await request(form.dataset.url, { method: form.dataset.method, body });
-    await replaceTable(panel, response);
-    const editor = panel.querySelector(".entry-editor");
-    const id = editor.dataset.returnId || panel.querySelector(".entry-table tbody tr:last-child").dataset.id;
-    editor.replaceChildren();
-    status(panel.querySelector(".panel-status"), "记录已保存。");
-    return rowButton(panel, id);
+function getConfirmationDialog() {
+  if (confirmationDialog) return confirmationDialog;
+  const dialog = document.createElement("dialog");
+  dialog.className = "confirm-dialog modal";
+  dialog.setAttribute("aria-labelledby", "confirmation-title");
+  dialog.setAttribute("aria-describedby", "confirmation-message");
+  const header = document.createElement("div");
+  header.className = "dialog-header";
+  const title = document.createElement("h2");
+  title.id = "confirmation-title";
+  header.append(title);
+  const body = document.createElement("div");
+  body.className = "modal-body";
+  const message = document.createElement("p");
+  message.id = "confirmation-message";
+  message.className = "confirm-message";
+  body.append(message);
+  const footer = document.createElement("div");
+  footer.className = "modal-footer";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.textContent = "取消";
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  footer.append(cancel, confirm);
+  dialog.append(header, body, footer);
+  document.body.append(dialog);
+  cancel.addEventListener("click", () => dialog.close("cancel"));
+  confirm.addEventListener("click", () => dialog.close("confirm"));
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    dialog.close("cancel");
   });
-});
+  confirmationDialog = { dialog, title, message, confirm, cancel };
+  return confirmationDialog;
+}
 
-document.addEventListener("click", async (event) => {
-  const clearDate = event.target.closest(".btn-clear-date");
-  if (clearDate) {
-    if (clearDate.disabled) return;
-    const wrapper = clearDate.closest(".dotted-date");
-    const control = wrapper.querySelector(".dotted-date-native");
-    control.value = "";
-    control.dispatchEvent(new Event("input", { bubbles: true }));
-    control.dispatchEvent(new Event("change", { bubbles: true }));
-    wrapper.querySelector(".dotted-date-display").focus();
-    return;
+export function confirmAction({ title, message, confirmLabel = "确认", danger = false }) {
+  const result = confirmationQueue.then(() => new Promise((resolve) => {
+    const controls = getConfirmationDialog();
+    const previousFocus = document.activeElement;
+    controls.title.textContent = title || "请确认";
+    controls.message.textContent = message || "";
+    controls.confirm.textContent = confirmLabel;
+    controls.confirm.className = danger ? "danger" : "primary";
+    controls.dialog.returnValue = "";
+    controls.dialog.addEventListener("close", () => {
+      const accepted = controls.dialog.returnValue === "confirm";
+      if (previousFocus?.isConnected) previousFocus.focus();
+      resolve(accepted);
+    }, { once: true });
+    controls.dialog.showModal();
+    (danger ? controls.cancel : controls.confirm).focus();
+  }));
+  confirmationQueue = result.catch(() => {});
+  return result;
+}
+
+export function createEntryEditor(dialog, { onSaved }) {
+  if (editorControllers.has(dialog)) return editorControllers.get(dialog);
+  const holder = dialog.querySelector(".entry-editor");
+  const loadStatus = dialog.querySelector(".editor-load-status");
+  const title = dialog.querySelector("#entry-dialog-title");
+  let panel = null;
+  let loadController = null;
+  let generation = 0;
+  let openIntent = 0;
+  let returnFocus = null;
+  let returnId = "";
+  let closePromise = null;
+  let lastUrl = "";
+
+  const form = () => holder.querySelector("form.entry");
+  const isBusy = () => panel?.dataset.busy === "true";
+  const isDirty = () => Boolean(dialog.open && (
+    form()?.dataset.dirty === "true" || form()?._activeOcrZones?.size || isBusy()
+  ));
+
+  function restoreFocus() {
+    const row = panel?.querySelector(`tr[data-id="${returnId}"]`);
+    const target = returnFocus?.isConnected ? returnFocus
+      : row?.querySelector("[data-editor-trigger]")
+        || panel?.querySelector("[data-editor-trigger]");
+    if (target && !target.disabled) target.focus();
   }
-  const tab = event.target.closest(".tab");
-  if (tab) {
-    activate(tab.dataset.target);
-    location.hash = tab.dataset.target;
-    return;
+
+  function clearEditor() {
+    generation += 1;
+    loadController?.abort();
+    loadController = null;
+    const current = form();
+    if (current) abortFormOcr(current);
+    holder.replaceChildren();
+    holder.removeAttribute("aria-busy");
+    status(loadStatus, "");
+    loadStatus?.querySelector(".editor-load-retry")?.remove();
+    if (dialog.open) dialog.close();
+    if (panel) syncControls(panel);
+    if (panel) panel.dispatchEvent(new Event("panel-state-change"));
+    restoreFocus();
   }
-  const authorButton = event.target.closest(".btn-author-add, .btn-author-remove, .btn-author-up, .btn-author-down");
-  if (authorButton) {
-    editAuthorList(authorButton);
-    return;
+
+  async function close() {
+    if (isBusy()) return false;
+    if (!dialog.open) return true;
+    if (closePromise) return closePromise;
+    const currentGeneration = generation;
+    closePromise = (async () => {
+      if (isDirty() && !(await confirmAction({
+        title: "放弃未保存的修改？",
+        message: "当前草稿尚未保存。离开将放弃草稿并停止正在进行的识别，原记录和附件不会更改。",
+        confirmLabel: "放弃修改",
+        danger: true,
+      }))) return false;
+      if (currentGeneration !== generation || isBusy()) return false;
+      clearEditor();
+      return true;
+    })();
+    try {
+      return await closePromise;
+    } finally {
+      closePromise = null;
+    }
   }
-  const savedButton = event.target.closest(".ocr-saved");
-  if (savedButton) {
-    if (!savedButton.disabled) await triggerSavedOcr(savedButton.closest(".tab-panel"), savedButton.closest("form.entry"), savedButton.closest(".ocr-zone"));
-    return;
+
+  async function load(url) {
+    const token = ++generation;
+    loadController?.abort();
+    const controller = new AbortController();
+    loadController = controller;
+    holder.replaceChildren();
+    holder.setAttribute("aria-busy", "true");
+    status(loadStatus, "正在加载编辑表单…");
+    try {
+      const response = await request(url, { signal: controller.signal });
+      const html = await response.text();
+      if (token !== generation || !dialog.open) return false;
+      const fragment = document.createElement("template");
+      fragment.innerHTML = html.trim();
+      if (!fragment.content.querySelector("form.entry")) throw new Error("编辑表单加载不完整，请重试");
+      holder.replaceChildren(fragment.content);
+      const current = form();
+      for (const authors of current.querySelectorAll(".authors-editor")) syncAuthors(authors);
+      for (const upload of current.querySelectorAll(".upload-control")) updateUploadSelection(upload);
+      syncControls(panel);
+      status(loadStatus, "");
+      const label = current.querySelector(".entry-label")?.textContent.trim();
+      if (label && title) title.textContent = label;
+      current.querySelector("input:not([type=hidden]):not([type=file]), select, textarea, button")?.focus();
+      return true;
+    } catch (error) {
+      if (token !== generation || error.name === "AbortError") return false;
+      status(loadStatus, `加载失败：${error.message}`, true);
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "editor-load-retry";
+      retry.textContent = "重新加载";
+      loadStatus?.append(retry);
+      return false;
+    } finally {
+      if (token === generation) {
+        loadController = null;
+        holder.removeAttribute("aria-busy");
+      }
+    }
   }
-  const stopButton = event.target.closest(".ocr-cancel");
-  if (stopButton) {
-    if (stopButton.disabled) return;
-    const zone = stopButton.closest(".ocr-zone");
-    stopZoneOcr(zone);
-    status(zone.querySelector(".ocr-status"), "已停止识别，当前输入与附件已保留；可点击重新识别再次尝试。");
-    const form = stopButton.closest("form.entry");
-    status(form.querySelector(".status"), form.dataset.dirty === "true" ? "有未保存的修改" : "识别已停止，记录未更改");
-    zone.querySelector(".ocr-saved").focus();
-    return;
-  }
-  const clearButton = event.target.closest(".btn-clear-upload");
-  if (clearButton) {
-    if (clearButton.disabled) return;
-    clearZoneSelection(clearButton.closest(".upload-control"));
-    return;
-  }
-  const retryButton = event.target.closest(".ocr-retry");
-  if (retryButton) {
-    if (retryButton.disabled) return;
-    const zone = retryButton.closest(".ocr-zone");
-    const form = retryButton.closest("form.entry");
-    const panel = retryButton.closest(".tab-panel");
-    const input = zone.querySelector('input[type="file"]');
-    const file = input.files[0];
-    if (zoneOcrState(zone).mode === "saved") await triggerSavedOcr(panel, form, zone);
-    else if (file) await triggerOcr(panel, form, zone, file);
-    return;
-  }
-  const button = event.target.closest(".btn-add, .btn-edit, .btn-cancel, .btn-delete, .btn-move");
-  if (!button || button.disabled) return;
-  const panel = button.closest(".tab-panel");
-  if (panel.dataset.busy === "true") return;
-  const section = panel.querySelector(".entry-list").dataset.section;
-  if (button.classList.contains("btn-add")) {
-    await openEditor(panel, `/admin/${section}/new`);
-    return;
-  }
-  if (button.classList.contains("btn-cancel")) {
-    const editor = panel.querySelector(".entry-editor");
-    if (editor.querySelector('[data-dirty="true"]') && !confirm("放弃未保存的修改？")) return;
-    const openForm = editor.querySelector("form.entry");
-    if (openForm) abortFormOcr(openForm);
-    const id = editor.dataset.returnId;
-    editor.replaceChildren();
+
+  async function open(nextPanel, url) {
+    const intent = ++openIntent;
+    const trigger = document.activeElement;
+    if (!(await close()) || intent !== openIntent) return false;
+    if (nextPanel.dataset.busy === "true") return false;
+    panel = nextPanel;
+    lastUrl = url;
+    returnFocus = trigger;
+    returnId = trigger?.closest("tr[data-id]")?.dataset.id || "";
+    panel.append(dialog);
+    if (title) title.textContent = panel.dataset.section === "basic" ? "编辑个人基本信息" : "编辑记录";
+    dialog.showModal();
     syncControls(panel);
-    status(panel.querySelector(".panel-status"), "已取消，记录未更改。");
-    rowButton(panel, id).focus();
-    return;
+    panel.dispatchEvent(new Event("panel-state-change"));
+    return load(url);
   }
-  const row = button.closest("tr");
-  if (button.classList.contains("btn-edit")) {
-    await openEditor(panel, `/admin/${section}/${row.dataset.id}/edit`, row.dataset.id);
-  } else if (button.classList.contains("btn-move")) {
-    const index = [...row.parentElement.children].indexOf(row);
-    await moveRow(panel, row, index + Number(button.dataset.direction));
-  } else if (confirm("确定删除该条记录及其附件？")) {
-    await perform(panel, async () => {
-      const nextId = (row.nextElementSibling || row.previousElementSibling)?.dataset.id;
-      const response = await request(`/admin/${section}/${row.dataset.id}`, { method: "DELETE" });
-      await replaceTable(panel, response);
-      status(panel.querySelector(".panel-status"), "记录已删除。");
-      return rowButton(panel, nextId);
-    });
-  }
-});
 
-document.addEventListener("change", async (event) => {
-  const clearBox = event.target.closest(".ocr-key-clear input[type=checkbox]");
-  if (clearBox) {
-    const settingsForm = clearBox.closest("#ocr-settings-form");
-    const keyInput = settingsForm.elements.api_key;
-    keyInput.disabled = clearBox.checked;
-    if (clearBox.checked) keyInput.value = "";
-    invalidateOcrTest(settingsForm);
-    settingsForm.dataset.dirty = "true";
-    status(settingsForm.querySelector(".panel-status"), "配置已修改，请重新测试后保存。");
-    return;
-  }
-  const entry = event.target.closest("form.entry");
-  if (entry && event.target.matches('select, input[type="checkbox"], .dotted-date-native, .dotted-date-display')) {
-    const authors = event.target.closest(".authors-editor");
+  function markEdited(control) {
+    const current = control.closest("form.entry");
+    if (!current || isBusy()) return;
+    const authors = control.closest(".authors-editor");
     if (authors) syncAuthors(authors, true);
-    else if (event.target.matches(".dotted-date-display")) markControlEdited(editDottedDate(event.target));
-    else {
-      syncDottedDate(event.target);
-      markControlEdited(event.target);
+    else if (control.matches(".dotted-date-display")) markControlEdited(editDottedDate(control));
+    else if (control.type !== "file") {
+      syncDottedDate(control);
+      markControlEdited(control);
     }
-    entry.dataset.dirty = "true";
-    status(entry.querySelector(".status"), "有未保存的修改");
+    current.dataset.dirty = "true";
+    status(current.querySelector(".status"), "有未保存的修改");
   }
-  const removeBox = event.target.closest('input[name="remove_file"]');
-  const savedZone = removeBox?.closest("[data-saved-ocr-url]");
-  if (savedZone) {
-    if (zoneOcrState(savedZone).mode === "saved") {
-      stopZoneOcr(savedZone);
-      status(savedZone.querySelector(".ocr-status"), "附件删除标记已变化，当前输入已保留；请核对后重新识别。");
+
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    void close();
+  });
+  dialog.addEventListener("input", (event) => markEdited(event.target));
+  dialog.addEventListener("change", async (event) => {
+    const control = event.target;
+    const current = control.closest("form.entry");
+    if (!current || isBusy()) return;
+    markEdited(control);
+    const savedZone = control.matches('input[name="remove_file"]')
+      ? control.closest("[data-saved-ocr-url]") : null;
+    if (savedZone) {
+      if (zoneOcrState(savedZone).mode === "saved") {
+        stopZoneOcr(savedZone);
+        status(savedZone.querySelector(".ocr-status"), "附件删除标记已变化，当前输入已保留；请核对后重新识别。");
+      }
+      syncSavedOcrControls(savedZone);
     }
-    syncSavedOcrControls(savedZone);
-    return;
-  }
-  const input = event.target.closest(".upload-input");
-  if (!input) return;
-  const control = input.closest(".upload-control");
-  updateUploadSelection(control);
-  const zone = input.closest(".ocr-zone");
-  if (!zone) return;
-  syncSavedOcrControls(zone);
-  const form = input.closest("form.entry");
-  const panel = input.closest(".tab-panel");
-  const file = input.files[0];
-  form.dataset.dirty = "true";
-  status(form.querySelector(".status"), "有未保存的修改");
-  if (file) await handleZoneFileSelected(panel, form, zone, file);
-  else clearZoneSelection(control);
-});
-
-document.addEventListener("dragover", (event) => {
-  const zone = event.target.closest(".upload-dropzone");
-  if (!zone || !event.dataTransfer?.types.includes("Files")) return;
-  event.preventDefault();
-  const disabled = zone.querySelector(".upload-input").disabled;
-  zone.classList.toggle("dragover", !disabled);
-  event.dataTransfer.dropEffect = disabled ? "none" : "copy";
-});
-
-document.addEventListener("dragleave", (event) => {
-  const zone = event.target.closest(".upload-dropzone");
-  if (!zone || (event.relatedTarget instanceof Node && zone.contains(event.relatedTarget))) return;
-  zone.classList.remove("dragover");
-});
-
-document.addEventListener("drop", (event) => {
-  const zone = event.target.closest(".upload-dropzone");
-  if (!zone) return;
-  event.preventDefault();
-  zone.classList.remove("dragover");
-  const input = zone.querySelector(".upload-input");
-  if (input.disabled) return;
-  const control = zone.closest(".upload-control");
-  const files = event.dataTransfer?.files;
-  if (!files?.length) return;
-  if (files.length !== 1) {
-    status(control.querySelector(".upload-status"), "请一次只拖入一个文件", true);
-    return;
-  }
-  input.files = files;
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  input.dispatchEvent(new Event("change", { bubbles: true }));
-});
-
-document.addEventListener("keydown", (event) => {
-  const calendar = event.target.closest(".dotted-date-native");
-  if (calendar && !calendar.disabled && ["Enter", " "].includes(event.key)
-      && typeof calendar.showPicker === "function") {
+    if (!control.matches(".upload-input")) return;
+    const upload = control.closest(".upload-control");
+    updateUploadSelection(upload);
+    const file = control.files[0];
+    const problem = file ? validateOcrFile(file, control, Number(current.dataset.maxUploadMb || 0)) : "";
+    control.setCustomValidity(problem);
+    if (problem) status(upload.querySelector(".upload-status"), problem, true);
+    const zone = control.closest(".ocr-zone");
+    if (!zone) return; // A basic photo is uploaded without OCR.
+    stopZoneOcr(zone);
+    syncSavedOcrControls(zone);
+    if (file) await handleZoneFileSelected(panel, current, zone, file);
+    else clearZoneSelection(upload);
+  });
+  dialog.addEventListener("submit", async (event) => {
+    const current = event.target.closest("form.entry");
+    if (!current) return;
+    event.preventDefault();
+    if (isBusy() || current._activeOcrZones?.size || !current.reportValidity()) return;
+    for (const authors of current.querySelectorAll(".authors-editor")) syncAuthors(authors);
+    let body;
+    try {
+      body = new FormData(current);
+    } catch {
+      status(current.querySelector(".status"), "附件选择已失效，请重新选择本地文件后保存；其他输入已保留。", true);
+      return;
+    }
+    const currentPanel = panel;
+    const section = currentPanel.dataset.section;
+    const scroller = currentPanel.querySelector(".table-wrap");
+    const scrollLeft = scroller?.scrollLeft || 0;
+    const succeeded = await perform(currentPanel, async () => {
+      status(current.querySelector(".status"), "保存中…");
+      const response = await request(current.dataset.url, { method: current.dataset.method, body });
+      const html = await response.text();
+      await onSaved(section, html);
+      const newScroller = currentPanel.querySelector(".table-wrap");
+      if (newScroller) newScroller.scrollLeft = scrollLeft;
+      delete current.dataset.dirty;
+      status(currentPanel.querySelector(".panel-status"), "记录已保存。");
+    });
+    if (succeeded) clearEditor();
+  });
+  dialog.addEventListener("click", async (event) => {
+    const button = event.target.closest("button");
+    if (!button || button.disabled) return;
+    if (button.matches(".editor-close, .btn-cancel")) {
+      await close();
+      return;
+    }
+    if (button.matches(".editor-load-retry")) {
+      await load(lastUrl);
+      return;
+    }
+    if (isBusy()) return;
+    if (button.matches(".btn-clear-date")) {
+      const wrapper = button.closest(".dotted-date");
+      const control = wrapper.querySelector(".dotted-date-native");
+      control.value = "";
+      control.dispatchEvent(new Event("input", { bubbles: true }));
+      wrapper.querySelector(".dotted-date-display").focus();
+    } else if (button.matches(".btn-author-add, .btn-author-remove, .btn-author-up, .btn-author-down")) {
+      editAuthorList(button);
+    } else if (button.matches(".ocr-saved")) {
+      await triggerSavedOcr(panel, button.closest("form.entry"), button.closest(".ocr-zone"));
+    } else if (button.matches(".ocr-cancel")) {
+      const zone = button.closest(".ocr-zone");
+      stopZoneOcr(zone);
+      status(zone.querySelector(".ocr-status"), "已停止识别，当前输入与附件已保留；可重新识别。");
+      const current = form();
+      status(current.querySelector(".status"), current.dataset.dirty === "true" ? "有未保存的修改" : "记录未更改");
+      zone.querySelector(".ocr-saved, .ocr-retry, .upload-input")?.focus();
+    } else if (button.matches(".btn-clear-upload")) {
+      const upload = button.closest(".upload-control");
+      upload.querySelector(".upload-input").setCustomValidity("");
+      clearZoneSelection(upload);
+    } else if (button.matches(".ocr-retry")) {
+      const zone = button.closest(".ocr-zone");
+      const current = button.closest("form.entry");
+      const file = zone.querySelector('input[type="file"]').files[0];
+      if (zoneOcrState(zone).mode === "saved") await triggerSavedOcr(panel, current, zone);
+      else if (file) await triggerOcr(panel, current, zone, file);
+    }
+  });
+  dialog.addEventListener("dragover", (event) => {
+    const zone = event.target.closest(".upload-dropzone");
+    if (!zone || !event.dataTransfer?.types.includes("Files")) return;
+    event.preventDefault();
+    const disabled = zone.querySelector(".upload-input").disabled;
+    zone.classList.toggle("dragover", !disabled);
+    event.dataTransfer.dropEffect = disabled ? "none" : "copy";
+  });
+  dialog.addEventListener("dragleave", (event) => {
+    const zone = event.target.closest(".upload-dropzone");
+    if (!zone || (event.relatedTarget instanceof Node && zone.contains(event.relatedTarget))) return;
+    zone.classList.remove("dragover");
+  });
+  dialog.addEventListener("drop", (event) => {
+    const zone = event.target.closest(".upload-dropzone");
+    if (!zone) return;
+    event.preventDefault();
+    zone.classList.remove("dragover");
+    const input = zone.querySelector(".upload-input");
+    const files = event.dataTransfer?.files;
+    if (input.disabled || !files?.length) return;
+    const message = zone.closest(".upload-control").querySelector(".upload-status");
+    if (files.length !== 1) {
+      status(message, "请一次只拖入一个文件", true);
+      return;
+    }
+    try {
+      input.files = files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    } catch {
+      status(message, "无法接收拖入的文件，请点击上传区域重新选择本地文件。", true);
+    }
+  });
+  dialog.addEventListener("keydown", (event) => {
+    const calendar = event.target.closest(".dotted-date-native");
+    if (!calendar || calendar.disabled || !["Enter", " "].includes(event.key)
+        || typeof calendar.showPicker !== "function") return;
     event.preventDefault();
     calendar.showPicker();
-    return;
-  }
-  const tab = event.target.closest(".tab");
-  if (!tab) return;
-  const tabs = [...document.querySelectorAll(".tab")];
-  const index = tabs.indexOf(tab);
-  let next;
-  if (["ArrowRight", "ArrowDown"].includes(event.key)) next = tabs[(index + 1) % tabs.length];
-  else if (["ArrowLeft", "ArrowUp"].includes(event.key)) next = tabs[(index + tabs.length - 1) % tabs.length];
-  else if (event.key === "Home") next = tabs[0];
-  else if (event.key === "End") next = tabs[tabs.length - 1];
-  if (next) {
-    event.preventDefault();
-    activate(next.dataset.target, true);
-    location.hash = next.dataset.target;
-  }
-});
+  });
+  const controller = { open, close, isDirty, isBusy };
+  editorControllers.set(dialog, controller);
+  return controller;
+}
 
-window.addEventListener("hashchange", () => activate(location.hash.slice(1)));
-window.addEventListener("beforeunload", (event) => {
-  if (saving || document.querySelector('form.entry[data-dirty="true"], #ocr-settings-form[data-dirty="true"]')) {
-    event.preventDefault();
-    event.returnValue = "";
+export function initModelSettings(form) {
+  if (modelControllers.has(form)) return modelControllers.get(form);
+  function changed() {
+    if (form.dataset.busy === "true") return;
+    form.dataset.dirty = "true";
+    if (form.elements.clear_api_key.checked) form.elements.api_key.value = "";
+    invalidateOcrTest(form);
+    status(form.querySelector(".panel-status"), "配置已修改，请重新测试后保存。");
   }
-});
-activate(location.hash.slice(1) || "basic");
+  form.addEventListener("input", changed);
+  form.addEventListener("change", changed);
+  form.addEventListener("click", async (event) => {
+    const button = event.target.closest(".btn-test-ocr");
+    if (button && !button.disabled) await submitOcrSettings(form, true);
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await submitOcrSettings(form, false);
+  });
+  syncSettingsControls(form);
+  const controller = {
+    isDirty: () => form.dataset.dirty === "true",
+    isBusy: () => form.dataset.busy === "true",
+  };
+  modelControllers.set(form, controller);
+  return controller;
+}

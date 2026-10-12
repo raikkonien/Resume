@@ -24,7 +24,7 @@ mcp = MCPServer("resume", instructions=(
 
 def profile_id() -> int:
     user = authenticated_user.get()
-    if user is None or user["role"] != "user":
+    if user is None:
         raise PermissionError("需要有效的个人资料令牌")
     return user["id"]
 

@@ -20,13 +20,13 @@ class SavedPaperTests(unittest.TestCase):
         self.client = http_client(self)
         self.pdf = make_pdf_bytes(2)
         response = self.client.post(
-            "/admin/papers", data={"title": "Saved original", "cas_quartile": "二区", "jcr_quartile": "Q3"},
+            "/api/entries/papers", data={"title": "Saved original", "cas_quartile": "二区", "jcr_quartile": "Q3"},
             files={"article_pdf": ("original.pdf", self.pdf, "application/pdf")},
         )
         self.assertEqual(response.status_code, 201, response.text)
         with closing(db.connect()) as conn:
             self.row, = db.list_rows(conn, SECTIONS["papers"], self.owner_id)
-        self.url = f"/admin/papers/{self.row['id']}/ocr"
+        self.url = f"/api/entries/papers/{self.row['id']}/ocr"
 
     def test_saved_recognition_is_a_draft_and_preserves_attachment_and_manual_quartiles(self):
         with patch("app.ocr._call_model", return_value=json.dumps({"fields": {
@@ -53,7 +53,7 @@ class SavedPaperTests(unittest.TestCase):
         detail_url = f"/papers/{self.row['id']}"
         self.assertEqual(self.client.get(detail_url).status_code, 200)
         with patch("app.ocr._call_model") as model:
-            for client, code in ((other, 404), (administrator, 403), (anonymous, 401)):
+            for client, code in ((other, 404), (administrator, 404), (anonymous, 401)):
                 self.assertEqual(client.get(detail_url).status_code, code)
                 self.assertEqual(client.post(self.url).status_code, code)
             self.assertEqual(self.client.post(self.url, headers={"Origin": "https://evil.example"}).status_code, 403)

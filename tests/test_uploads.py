@@ -36,7 +36,7 @@ class AttachmentUploadTests(unittest.TestCase):
     def test_jpg_named_png_proofs_save_and_download_with_correct_type(self):
         png = image_bytes("PNG")
         response = self.client.post(
-            "/admin/projects", data={"name": "Proof upload"},
+            "/api/entries/projects", data={"name": "Proof upload"},
             files={key: (f"{key}.JPG", png, "image/jpeg")
                    for key in ("fund_proof", "close_proof")},
         )
@@ -54,13 +54,13 @@ class AttachmentUploadTests(unittest.TestCase):
     def test_replacement_corrects_reverse_mismatch_and_removes_old_file(self):
         png, jpeg = image_bytes("PNG"), image_bytes("JPEG")
         response = self.client.post(
-            "/admin/projects", files={"close_proof": ("old.png", png, "image/png")},
+            "/api/entries/projects", files={"close_proof": ("old.png", png, "image/png")},
         )
         self.assertEqual(response.status_code, 201, response.text)
         row, = self.rows()
         old_path = self.upload_dir / row["close_proof"]
         response = self.client.put(
-            f"/admin/projects/{row['id']}",
+            f"/api/entries/projects/{row['id']}",
             files={"close_proof": ("new.png", jpeg, "image/png")},
         )
         self.assertEqual(response.status_code, 200, response.text)
@@ -73,14 +73,14 @@ class AttachmentUploadTests(unittest.TestCase):
     def test_invalid_second_proof_leaves_existing_record_and_files_unchanged(self):
         jpeg = image_bytes("JPEG")
         response = self.client.post(
-            "/admin/projects", data={"name": "Original"},
+            "/api/entries/projects", data={"name": "Original"},
             files={key: (f"{key}.jpeg", jpeg, "image/jpeg")
                    for key in ("fund_proof", "close_proof")},
         )
         self.assertEqual(response.status_code, 201, response.text)
         original, = self.rows()
         response = self.client.put(
-            f"/admin/projects/{original['id']}", data={"name": "Changed"},
+            f"/api/entries/projects/{original['id']}", data={"name": "Changed"},
             files={"fund_proof": ("valid.jpg", image_bytes("PNG"), "image/jpeg"),
                    "close_proof": ("invalid.jpg", b"<html>not an image</html>", "image/jpeg")},
         )
@@ -115,12 +115,60 @@ class AttachmentUploadTests(unittest.TestCase):
                         image_bytes("PNG")[:40], image_bytes("PNG")[:-8]):
             with self.subTest(content=content[:16]):
                 response = self.client.post(
-                    "/admin/projects",
+                    "/api/entries/projects",
                     files={"close_proof": ("proof.jpg", content, "image/jpeg")},
                 )
                 self.assertEqual(response.status_code, 400)
                 self.assertEqual(self.rows(), [])
                 self.assertEqual(list(self.upload_dir.rglob("*")), [])
+
+    def test_archive_preserves_attachment_and_restore_appends_original_id(self):
+        payload = image_bytes("PNG")
+        response = self.client.post("/api/entries/projects", data={"name": "Archived project"},
+                                    files={"close_proof": ("proof.png", payload, "image/png")})
+        self.assertEqual(response.status_code, 201)
+        row, = self.rows()
+        later = self.client.post("/api/entries/projects", data={"name": "Later project"})
+        self.assertEqual(later.status_code, 201)
+        url = f"/files/projects/{row['id']}/close_proof?download=1"
+        archived = self.client.post(f"/api/entries/projects/{row['id']}/archive")
+        self.assertEqual(archived.status_code, 200)
+        self.assertEqual(self.client.get(url).status_code, 404)
+        self.assertEqual([item["name"] for item in self.rows()], ["Later project"])
+        self.assertEqual((self.upload_dir / row["close_proof"]).read_bytes(), payload)
+        self.assertEqual(self.client.post(f"/api/entries/projects/{row['id']}/archive").status_code, 404)
+        self.assertEqual(self.client.post("/api/entries/projects/reorder", json={"ids": [row["id"]]}).status_code, 400)
+        self.assertEqual(self.client.post("/api/archive/restore",
+                                         json={"records": [{"section": "projects", "id": row["id"]}]}).status_code, 200)
+        restored = self.rows()
+        self.assertEqual(restored[-1]["id"], row["id"])
+        self.assertEqual(restored[-1]["close_proof"], row["close_proof"])
+        self.assertEqual(self.client.get(url).content, payload)
+        self.assertEqual(self.client.get("/api/archive").json(), [])
+        self.assertEqual(self.client.post(f"/api/entries/basic/{row['id']}/archive").status_code, 404)
+
+    def test_only_successful_actual_saves_generate_activity(self):
+        def events():
+            with closing(db.connect()) as conn:
+                return [item[0] for item in conn.execute(
+                    "SELECT action FROM record_events WHERE user_id=? ORDER BY id", (self.user_id,))]
+        with patch("app.admin.save_upload", side_effect=OSError("synthetic failure")):
+            response = self.client.post("/api/entries/projects", data={"name": "Failed"},
+                                        files={"close_proof": ("proof.png", image_bytes("PNG"), "image/png")})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(events(), [])
+        self.assertEqual(self.rows(), [])
+        png = image_bytes("PNG")
+        self.assertEqual(self.client.post("/api/entries/projects", data={"name": "Same"},
+            files={"close_proof": ("proof.png", png, "image/png")}).status_code, 201)
+        row, = self.rows()
+        self.assertEqual(events(), ["create"])
+        url = f"/api/entries/projects/{row['id']}"
+        self.assertEqual(self.client.put(url, data={"name": "Same"}).status_code, 200)
+        self.assertEqual(events(), ["create"])
+        self.assertEqual(self.client.put(url, data={"name": "Same"},
+            files={"close_proof": ("proof.png", png, "image/png")}).status_code, 200)
+        self.assertEqual(events(), ["create", "update"])
 
 
 if __name__ == "__main__":

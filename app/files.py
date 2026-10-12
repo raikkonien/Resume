@@ -78,17 +78,21 @@ def upload_path(username: str, rel_path: str) -> Path:
     return path
 
 
-def _entry_path(username: str, section: str, entry_id: int) -> Path:
+def entry_directory(username: str, section: str, entry_id: int) -> Path:
+    """Validate every component of one record's attachment directory."""
     if section not in SECTIONS or isinstance(entry_id, bool) or not isinstance(entry_id, int) or entry_id < 1:
         raise ValueError("记录文件目录无效")
-    return upload_path(username, f"{section}/{entry_id}")
+    directory = upload_path(username, f"{section}/{entry_id}")
+    if (directory.parent.exists() and not directory.parent.is_dir()) or (directory.exists() and not directory.is_dir()):
+        raise ValueError("记录文件目录无效")
+    return directory
 
 
 def save_upload(username: str, section: str, entry_id: int, field: Field,
                 upload: UploadFile, extension: str) -> tuple[str, str]:
     """Persist an already-validated upload inside exactly one profile directory."""
     with db.write_lock:
-        directory = _entry_path(username, section, entry_id)
+        directory = entry_directory(username, section, entry_id)
         if not any(item.key == field.key and item.type == "file" for item in SECTIONS[section].fields):
             raise ValueError("文件字段无效")
         if extension not in {".pdf", ".jpg", ".jpeg", ".png"} or extension not in field.accept.split(","):
@@ -130,6 +134,6 @@ def delete_upload(username: str, rel_path: str | None) -> None:
 
 def delete_entry_dir(username: str, section: str, id: int) -> None:
     with db.write_lock:
-        directory = _entry_path(username, section, id)
+        directory = entry_directory(username, section, id)
         if directory.exists():
             shutil.rmtree(directory)

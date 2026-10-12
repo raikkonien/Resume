@@ -1,63 +1,26 @@
 {% extends "base.html" %}
-{% from "macros.html" import render_cell %}
-{% block scripts %}<script src="{{ url_for('static', path='resume.js') }}?v={{ asset_versions['resume.js'] }}" defer></script>{% endblock %}
-{% block title %}{{ basic.name or "简历" }}{% endblock %}
-{% block nav %}<a href="/admin">维护信息</a><button type="button" id="export-resume" class="quiet" data-url="/resume/export" aria-haspopup="dialog">导出简历</button><form method="post" action="/logout"><button class="quiet" type="submit">退出</button></form>{% endblock %}
+{% from "macros.html" import icon %}
+{% block title %}简历 · 个人简历{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', path='resume.js') }}?v={{ asset_versions['resume.js'] }}"></script>{% endblock %}
 {% block content %}
-<dialog id="export-dialog" class="export-dialog" aria-labelledby="export-title" aria-describedby="export-message">
-  <div class="export-spinner" aria-hidden="true"></div>
-  <h2 id="export-title">正在生成简历 PDF</h2>
-  <p id="export-message" role="status" aria-live="polite">正在整理资料与分页，完成后将自动下载。请稍候…</p>
-  <button type="button" class="quiet" id="export-dismiss">关闭等待窗口</button>
-</dialog>
-<p id="export-status" class="export-status" role="status" aria-live="polite" hidden></p>
-<dialog id="paper-dialog" class="paper-dialog" aria-labelledby="paper-dialog-title">
-  <header class="paper-dialog-header">
-    <h2 id="paper-dialog-title">文章详情</h2>
-    <button type="button" id="paper-dialog-close" class="quiet" aria-label="关闭文章详情" autofocus>
-      <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-    </button>
-  </header>
-  <div class="paper-dialog-body">
-    <p id="paper-dialog-status" role="status" aria-live="polite"></p>
-    <button type="button" id="paper-dialog-retry" hidden>重新加载</button>
-    <div id="paper-dialog-content"></div>
-  </div>
-</dialog>
-<div class="page-heading resume-heading"><div><p class="eyebrow">CURRICULUM VITAE</p><h1>{{ basic.name or '个人简历' }}</h1>{% if basic.title or basic.employer %}<p class="muted">{{ basic.title or '' }}{% if basic.title and basic.employer %} · {% endif %}{{ basic.employer or '' }}</p>{% endif %}</div>
-<div class="resume-search" role="search">
-  <label class="sr-only" for="resume-search-input">搜索简历内容</label>
-  <div class="search-field">
-    {# Tabler Icons: search, x (MIT). #}
-    <svg class="search-icon" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
-    <input type="text" id="resume-search-input" class="search-input" placeholder="搜索简历内容" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-controls="resume-search-list" aria-autocomplete="list" aria-haspopup="listbox">
-    <button type="button" id="resume-search-clear" class="search-clear" aria-label="清除搜索" hidden><svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg></button>
-  </div>
-  <ul id="resume-search-list" class="search-suggestions" role="listbox" aria-label="搜索建议" hidden></ul>
-  <p id="resume-search-status" class="search-status sr-only" role="status" aria-live="polite"></p>
-</div>
-</div>
-<nav class="resume-nav" aria-label="简历模块导航">
-  <a href="#resume-basic">{{ basic_section.label }}</a>
-  {% for section in sections %}<a href="#resume-{{ section.key }}">{{ section.label }}</a>{% endfor %}
-</nav>
-<section class="block" id="resume-basic">
-  <h2><span class="section-index">01</span>{{ basic_section.label }}</h2>
-  <div class="basic-display">
-    <dl class="basic-grid">{% for field in basic_section.fields %}{% if field.type != 'file' %}<div class="basic-item{% if field.type == 'textarea' %} basic-item-wide{% endif %}"><dt>{{ field.label }}</dt><dd{% if field.type == 'textarea' %} class="multiline"{% elif field.type in ('date', 'month', 'year') %} class="date-value"{% endif %}>{{ format_value(field, basic) }}</dd></div>{% endif %}{% endfor %}</dl>
-    {% if basic.photo %}<figure class="portrait"><img src="/files/basic/{{ basic.id }}/photo" class="photo-preview" alt="{{ basic.name or '个人' }}的照片"><figcaption><a href="/files/basic/{{ basic.id }}/photo?download=1">下载照片</a>{% if basic.photo_name %}<span class="file-name">{{ basic.photo_name }}</span>{% endif %}</figcaption></figure>{% endif %}
-  </div>
-</section>
-{% for section in sections %}
-<section class="block" id="resume-{{ section.key }}">
-  <h2><span class="section-index">{{ '%02d' | format(loop.index + 1) }}</span>{{ section.label }}<span class="count">{{ rows[section.key] | length }} 条</span></h2>
-  {% if rows[section.key] %}
-  <div class="table-wrap" tabindex="0" role="region" aria-label="{{ section.label }}，可横向滚动">
-    {% set table_fields = section.fields | rejectattr('key', 'in', ('doi', 'volume', 'issue', 'pages')) | list if section.key == 'papers' else section.fields %}
-    <table{% if section.key == 'papers' %} class="papers-table"{% endif %}><thead><tr>{% for field in table_fields %}<th scope="col"{% if section.key == 'papers' %} data-field="{{ field.key }}"{% endif %}>{{ '附件' if section.key == 'papers' and field.key == 'article_pdf' else field.label }}</th>{% endfor %}</tr></thead>
-    <tbody>{% for row in rows[section.key] %}<tr>{% for field in table_fields %}{% if section.key == 'papers' and field.key == 'title' %}<td data-field="title"><button type="button" class="paper-title" data-url="/papers/{{ row.id }}" aria-haspopup="dialog" aria-controls="paper-dialog">{{ row.title or '未填写题目（查看详情）' }}</button></td>{% else %}{{ render_cell(field, row, section.key, section.key != 'papers', basic) }}{% endif %}{% endfor %}</tr>{% endfor %}</tbody></table>
-  </div>
-  {% else %}<p class="empty">暂无记录</p>{% endif %}
+<div class="page-heading"><div><p class="eyebrow">个人资料工作台</p><h1>简历</h1></div><button type="button" id="export-resume" class="primary" data-url="/resume/export" aria-haspopup="dialog">{{ icon('download') }}导出简历</button></div>
+<div class="resume-search" role="search"><label class="sr-only" for="resume-search-input">搜索全部简历内容</label><div class="search-field">{{ icon('search') }}<input type="search" id="resume-search-input" placeholder="搜索全部简历内容…" autocomplete="off" spellcheck="false"><button type="button" id="resume-search-clear" class="icon-button quiet" aria-label="清除搜索" title="清除搜索" hidden>{{ icon('close') }}</button></div></div>
+<nav class="resume-tabs" role="tablist" aria-label="简历栏目"><button type="button" class="resume-tab active" role="tab" data-tab="overview" aria-selected="true">概览</button>{% for section in all_sections %}<button type="button" class="resume-tab" role="tab" data-tab="{{ section.key }}" aria-selected="false" tabindex="-1">{{ section.label }}</button>{% endfor %}</nav>
+<p id="resume-search-status" class="muted" role="status" aria-live="polite"></p>
+<div id="temporary-filter" class="filter-bar" hidden><span></span><button type="button" class="quiet">清除定位筛选</button></div>
+<p id="resume-empty" class="empty card" hidden>没有匹配的记录</p>
+<div class="resume-panels">
+{% for section in all_sections %}
+<section class="tab-panel card" id="resume-{{ section.key }}" data-section="{{ section.key }}" aria-labelledby="heading-{{ section.key }}">
+  <div class="panel-heading"><h2 id="heading-{{ section.key }}">{{ section.label }}</h2><button type="button" class="{{ 'btn-basic-edit' if section.single else 'btn-add' }} primary" data-editor-trigger data-url="{{ '/api/basic/edit' if section.single else '/api/entries/' ~ section.key ~ '/new' }}" hidden>{{ icon('edit' if section.single else 'plus') }}{{ '编辑基本信息' if section.single else '新建' }}</button></div>
+  {% set entries = [basic] if section.single else rows[section.key] %}{% set overview = true %}{% include "_entry_table.html" %}
+  <p class="panel-status" role="status" aria-live="polite"></p>
 </section>
 {% endfor %}
+</div>
+<script id="initial-layouts" type="application/json">{{ layouts | tojson }}</script>
+<dialog id="entry-dialog" class="entry-dialog" aria-labelledby="entry-dialog-title"><header class="dialog-header"><h2 id="entry-dialog-title">编辑记录</h2><button type="button" class="editor-close icon-button quiet" aria-label="关闭编辑" title="关闭编辑">{{ icon('close') }}</button></header><p class="editor-load-status" role="status" aria-live="polite"></p><div class="entry-editor"></div></dialog>
+<dialog id="export-dialog" class="export-dialog" aria-labelledby="export-title" aria-describedby="export-message"><div class="export-spinner" aria-hidden="true"></div><h2 id="export-title">正在生成简历 PDF</h2><p id="export-message" role="status" aria-live="polite">正在整理资料与分页，完成后将自动下载。</p><button type="button" class="quiet" id="export-dismiss">关闭等待窗口</button></dialog>
+<p id="export-status" class="export-status" role="status" aria-live="polite" hidden></p>
+<dialog id="paper-dialog" class="paper-dialog" aria-labelledby="paper-dialog-title"><header class="paper-dialog-header"><h2 id="paper-dialog-title">文章详情</h2><button type="button" id="paper-dialog-close" class="icon-button quiet" aria-label="关闭文章详情" title="关闭文章详情">{{ icon('close') }}</button></header><div class="paper-dialog-body"><p id="paper-dialog-status" role="status" aria-live="polite"></p><button type="button" id="paper-dialog-retry" hidden>重新加载</button><div id="paper-dialog-content"></div></div></dialog>
 {% endblock %}

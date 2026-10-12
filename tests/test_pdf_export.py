@@ -53,7 +53,7 @@ class ResumePdfTests(unittest.TestCase):
             text = normalized("".join(page.get_text() for page in pdf))
             self.assertIn("另一用户机密", text)
             self.assertNotIn("本人专属资料", text)
-        self.assertEqual(http_client(self, "admin").post("/resume/export").status_code, 403)
+        self.assertEqual(http_client(self, "admin").post("/resume/export").status_code, 200)
         anonymous = http_client(self, username=None)
         self.assertEqual(anonymous.post("/resume/export").status_code, 401)
         self.assertEqual(anonymous.post("/resume/export", headers={"Authorization": f"Bearer {MCP_TOKEN}"}).status_code, 401)
@@ -61,7 +61,7 @@ class ResumePdfTests(unittest.TestCase):
     def test_photo_chinese_multiline_and_long_identifiers_survive_pagination(self):
         with io.BytesIO() as photo, Image.new("RGB", (30, 40), "green") as image:
             image.save(photo, format="PNG")
-            self.assertEqual(self.client.post("/admin/basic", data={"name": "张三 <b>本人</b>"},
+            self.assertEqual(self.client.put("/api/basic", data={"name": "张三 <b>本人</b>"},
                 files={"photo": ("照片.png", photo.getvalue(), "image/png")}).status_code, 200)
         long_value = "LongIdentifier" * 40
         paragraphs = [f"研究经历第{index:03d}段，中文与English完整保留。" for index in range(90)]
@@ -105,6 +105,21 @@ class ResumePdfTests(unittest.TestCase):
             text = normalized("".join(page.get_text() for page in pdf))
             for value in expected:
                 self.assertIn(normalized(value), text)
+
+    def test_new_business_dates_are_exported_from_values_not_identifiers(self):
+        with closing(db.connect()) as conn:
+            db.insert_row(conn, SECTIONS["software"],
+                          {"name": "登记日期验收", "reg_number": "2024-REG-123",
+                           "reg_date": "2026-10-11"}, self.owner_id)
+            db.insert_row(conn, SECTIONS["standards"],
+                          {"name": "发布日期验收", "number": "2020-STANDARD",
+                           "publish_date": "2025-12-31"}, self.owner_id)
+        response = self.client.post("/resume/export")
+        self.assertEqual(response.status_code, 200)
+        with pymupdf.open(stream=response.content, filetype="pdf") as pdf:
+            text = normalized("".join(page.get_text() for page in pdf))
+        self.assertEqual(set(re.findall(r"\d{4}-\d{2}-\d{2}", text)),
+                         {"2026-10-11", "2025-12-31"})
 
     def test_missing_photo_returns_error_not_a_broken_download_and_can_retry(self):
         with closing(db.connect()) as conn:

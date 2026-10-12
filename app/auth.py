@@ -27,18 +27,16 @@ def current_user(request: Request) -> dict:
     return user
 
 
-def require_admin(request: Request) -> dict:
+def require_session_user(request: Request) -> dict:
     user = current_user(request)
-    if user["role"] != "admin" or getattr(request.state, "bearer", False):
-        raise HTTPException(403, "仅管理员可管理用户和 OCR 设置")
+    if getattr(request.state, "bearer", False):
+        raise HTTPException(401, "请使用登录会话访问")
     return user
 
 
-def require_profile(request: Request) -> dict:
-    user = current_user(request)
-    if user["role"] != "user":
-        raise HTTPException(403, "管理员没有个人档案")
-    return user
+def http_error_response(request: Request, error):
+    return JSONResponse({"error": str(error.detail)}, status_code=error.status_code,
+                        headers=error.headers)
 
 
 def same_origin_write(request: Request) -> bool:
@@ -74,8 +72,6 @@ async def login(request: Request):
         user = get_user_by_username(db, username)
     if user is not None and verify_password(password, user["password_hash"]):
         request.session.update(user_id=user["id"], session_version=user["session_version"])
-        if user["role"] == "admin":
-            destination = "/admin"
         return RedirectResponse(destination, status_code=303)
     return templates.TemplateResponse(request, "login.html", {
         "next": destination, "username": username, "error": "用户名或密码错误",
@@ -127,7 +123,7 @@ class AuthMiddleware:
                 if user is None:
                     request.session.clear()
         if user is not None:
-            user = {key: user[key] for key in ("id", "username", "role", "session_version")}
+            user = {key: user[key] for key in ("id", "username", "session_version")}
             request.state.user = user
             context_token = authenticated_user.set(user)
             try:

@@ -1,7 +1,7 @@
-"""Regression coverage for the NDJSON-streaming POST /admin/{section}/ocr endpoint.
+"""Regression coverage for the NDJSON-streaming POST /api/entries/{section}/ocr endpoint.
 
 `tests/test_ocr.py` covers `recognize()`'s progress/cancellation hooks directly;
-this file covers the admin-layer plumbing that turns those hooks into an HTTP
+this file covers the record-layer plumbing that turns those hooks into an HTTP
 NDJSON stream (request validation, event framing, and disconnect handling) that
 isn't otherwise exercised anywhere.
 """
@@ -48,7 +48,7 @@ class OcrStreamEndpointTests(unittest.TestCase):
     def test_streams_one_progress_event_per_page_then_a_single_result(self):
         with patch("app.ocr._call_model", side_effect=lambda *a, **k: stub_model_response()):
             response = self.client.post(
-                "/admin/projects/ocr",
+                "/api/entries/projects/ocr",
                 files={"file": ("contract.pdf", make_pdf_bytes(3), "application/pdf")},
                 data={"field": "contract"},
             )
@@ -64,7 +64,7 @@ class OcrStreamEndpointTests(unittest.TestCase):
 
     def test_streams_a_single_error_event_with_no_progress_for_a_bad_upload(self):
         response = self.client.post(
-            "/admin/projects/ocr",
+            "/api/entries/projects/ocr",
             files={"file": ("contract.pdf", b"not actually a pdf", "application/pdf")},
             data={"field": "contract"},
         )
@@ -79,7 +79,7 @@ class OcrStreamEndpointTests(unittest.TestCase):
             with self.subTest(field=field):
                 with patch("app.ocr._call_model") as mocked_call:
                     response = self.client.post(
-                        "/admin/projects/ocr",
+                        "/api/entries/projects/ocr",
                         files={"file": ("proof.pdf", make_pdf_bytes(1), "application/pdf")},
                         data={"field": field},
                     )
@@ -91,12 +91,12 @@ class OcrStreamEndpointTests(unittest.TestCase):
     def test_projects_contract_and_other_sections_remain_recognizable(self):
         with patch("app.ocr._call_model", side_effect=lambda *a, **k: stub_model_response()):
             projects_response = self.client.post(
-                "/admin/projects/ocr",
+                "/api/entries/projects/ocr",
                 files={"file": ("contract.pdf", make_pdf_bytes(1), "application/pdf")},
                 data={"field": "contract"},
             )
             transfers_response = self.client.post(
-                "/admin/transfers/ocr",
+                "/api/entries/transfers/ocr",
                 files={"file": ("proof.pdf", make_pdf_bytes(1), "application/pdf")},
                 data={"field": "payment_proof"},
             )
@@ -106,12 +106,12 @@ class OcrStreamEndpointTests(unittest.TestCase):
             self.assertEqual(events[-1]["type"], "result")
 
     def test_missing_file_and_invalid_field_still_return_early_json_400(self):
-        no_file = self.client.post("/admin/projects/ocr", data={"field": "contract"})
+        no_file = self.client.post("/api/entries/projects/ocr", data={"field": "contract"})
         self.assertEqual(no_file.status_code, 400)
         self.assertIn("error", no_file.json())
 
         bad_field = self.client.post(
-            "/admin/projects/ocr",
+            "/api/entries/projects/ocr",
             files={"file": ("contract.pdf", make_pdf_bytes(1), "application/pdf")},
             data={"field": "not_a_real_field"},
         )

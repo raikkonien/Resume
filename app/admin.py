@@ -1,32 +1,30 @@
 import asyncio
 from contextlib import AsyncExitStack, closing
-import hashlib
-import hmac
 import json
+import sqlite3
 import threading
-from urllib.parse import urlsplit
 
 import anyio.from_thread
 from fastapi import APIRouter, HTTPException, Request
-from itsdangerous import BadSignature, URLSafeTimedSerializer
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
-from starlette.responses import JSONResponse, RedirectResponse, StreamingResponse
+from starlette.responses import JSONResponse, StreamingResponse
 
-from .auth import current_user, require_admin, require_profile
-from .config import MAX_UPLOAD_MB, SECRET_KEY
+from .auth import require_session_user
+from .config import MAX_UPLOAD_MB
 from .db import (
-    connect, delete_row, get_basic, get_ocr_settings, get_row, get_user, insert_row, list_rows,
-    reorder_rows, save_ocr_settings, update_row, write_lock,
+    ArchiveDeletionPending, ArchiveRecordNotFound, _discard_new_row, _recover_archive_deletions,
+    archive_row, connect, delete_archived_rows, get_basic, get_ocr_settings, get_row, get_user,
+    get_table_layout, insert_row, list_rows, parse_archive_records, reorder_rows, restore_rows,
+    save_table_layout, update_row, write_lock,
 )
 from .files import delete_entry_dir, delete_upload, save_upload, upload_path, validate_upload
-from .management import render_management
-from .ocr import RecognitionCancelled, check_model, recognize
-from .sections import BASIC, ENTRY_SECTIONS, SECTIONS, parse_form
+from .management import active_session_user
+from .ocr import RecognitionCancelled, recognize
+from .sections import BASIC, SECTIONS, parse_form, record_label
 from .templating import templates
 
-router = APIRouter(prefix="/admin")
-ocr_test_signer = URLSafeTimedSerializer(SECRET_KEY, salt="ocr-settings-test")
+router = APIRouter(prefix="/api")
 
 
 def entry_section(key):
@@ -45,7 +43,7 @@ def require_row(db, section, id, user_id):
 
 def profile_user(db, user_id):
     user = get_user(db, user_id)
-    if user is None or user["role"] != "user":
+    if user is None:
         raise HTTPException(401)
     return user
 
@@ -57,21 +55,6 @@ def entry_position(rows, id):
     raise HTTPException(404)
 
 
-def render_admin(request, *, error=None, submitted=None, status_code=200):
-    user = require_profile(request)
-    with closing(connect()) as db:
-        basic = get_basic(db, user["id"])
-        rows = {s.key: list_rows(db, s, user["id"]) for s in ENTRY_SECTIONS}
-    if submitted:
-        for field in BASIC.fields:
-            if field.type != "file" and isinstance(submitted.get(field.key), str):
-                basic[field.key] = submitted[field.key]
-    return templates.TemplateResponse(request, "admin.html", {
-        "basic": basic, "basic_section": BASIC, "sections": tuple(SECTIONS.values()),
-        "entry_sections": ENTRY_SECTIONS, "rows": rows, "error": error,
-        "saved": request.query_params.get("saved") == "1",
-        "max_upload_mb": MAX_UPLOAD_MB,
-    }, status_code=status_code)
 
 
 def entry_fragment(request, section, row, position, status_code=200):
@@ -82,12 +65,10 @@ def entry_fragment(request, section, row, position, status_code=200):
 
 
 def table_fragment(request, section, entries, status_code=200):
-    basic = None
-    if section.key == "papers":
-        with closing(connect()) as db:
-            basic = get_basic(db, require_profile(request)["id"])
+    with closing(connect()) as db:
+        basic = get_basic(db, require_session_user(request)["id"])
     return templates.TemplateResponse(request, "_entry_table.html", {
-        "section": section, "entries": entries, "basic": basic,
+        "section": section, "entries": entries, "basic": basic, "overview": False,
     }, status_code=status_code)
 
 
@@ -96,7 +77,7 @@ def collect_uploads(section, form):
     return [(f, u) for f, u in uploads if isinstance(u, UploadFile) and u.filename]
 
 
-def save_form(user_id, section, id, form):
+def save_form(request: Request, section, id, form):
     """Validate a complete entry submission, then persist it.
 
     `id` is None for a brand-new record (nothing exists in the database yet)
@@ -113,7 +94,8 @@ def save_form(user_id, section, id, form):
     removals = (set(form.getlist("remove_file")) & file_fields) - upload_keys if id is not None else set()
     creating = id is None
     with write_lock, closing(connect()) as db:
-        user = profile_user(db, user_id)
+        user = active_session_user(request, db)
+        user_id = user["id"]
         if section.single:
             id = get_basic(db, user_id)["id"]
         if creating:
@@ -133,108 +115,27 @@ def save_form(user_id, section, id, form):
                     values[f"{key}_name"] = None
         except ValueError:
             if creating:
-                delete_row(db, section, id, user_id)
+                _discard_new_row(db, section, id, user_id)
                 delete_entry_dir(user["username"], section.key, id)
             raise
         except OSError as error:
             if creating:
-                delete_row(db, section, id, user_id)
+                _discard_new_row(db, section, id, user_id)
                 delete_entry_dir(user["username"], section.key, id)
             raise ValueError("文件保存失败，请重试") from error
-        update_row(db, section, id, values, user_id)
+        update_row(db, section, id, values, user_id,
+                   activity_action="create" if creating else "update",
+                   force_activity=creating or bool(uploads))
         return list_rows(db, section, user_id)
 
 
-def reorder_entry_rows(user_id, section, ids):
+def reorder_entry_rows(request: Request, section, ids):
     with write_lock, closing(connect()) as db:
-        profile_user(db, user_id)
+        user_id = active_session_user(request, db)["id"]
         reorder_rows(db, section, ids, user_id)
         return list_rows(db, section, user_id)
 
 
-@router.get("")
-def admin_page(request: Request):
-    if current_user(request)["role"] == "admin":
-        return render_management(request)
-    return render_admin(request)
-
-
-def public_ocr_settings(settings):
-    return {
-        "endpoint": settings["endpoint"], "model": settings["model"],
-        "has_api_key": bool(settings["api_key"]),
-    }
-
-
-@router.get("/ocr/settings")
-def read_ocr_settings(request: Request):
-    require_admin(request)
-    with closing(connect()) as db:
-        return public_ocr_settings(get_ocr_settings(db))
-
-
-def candidate_ocr_settings(body, stored):
-    if not isinstance(body, dict):
-        raise ValueError("设置格式错误")
-    endpoint, model, key = body.get("endpoint"), body.get("model"), body.get("api_key")
-    if not isinstance(endpoint, str) or not isinstance(model, str):
-        raise ValueError("请填写接口地址和模型名称")
-    endpoint, model = endpoint.strip(), model.strip()
-    if not endpoint or not model or len(endpoint) > 2048 or len(model) > 256:
-        raise ValueError("请填写有效的接口地址和模型名称")
-    url = urlsplit(endpoint)
-    if (url.scheme not in ("http", "https") or not url.hostname or url.fragment
-            or url.username is not None or url.password is not None
-            or any(char.isspace() for char in endpoint)):
-        raise ValueError("接口地址须为完整的 HTTP(S) 地址，不含用户名、密码或片段")
-    url.port
-    if key is None:
-        key = stored["api_key"]
-    elif (not isinstance(key, str) or len(key) > 4096 or not key.isascii()
-          or any(ord(char) < 32 or ord(char) == 127 for char in key)):
-        raise ValueError("API Key 格式错误")
-    return {"endpoint": endpoint, "model": model, "api_key": key.strip()}
-
-
-def settings_fingerprint(settings):
-    payload = json.dumps(settings, sort_keys=True, separators=(",", ":")).encode()
-    return hmac.new(SECRET_KEY.encode(), payload, hashlib.sha256).hexdigest()
-
-
-@router.post("/ocr/settings/test")
-async def test_ocr_settings(request: Request):
-    require_admin(request)
-    try:
-        body = await request.json()
-        with closing(connect()) as db:
-            candidate = candidate_ocr_settings(body, get_ocr_settings(db))
-        await run_in_threadpool(check_model, candidate)
-    except ValueError as error:
-        return JSONResponse({"error": str(error)}, status_code=400)
-    # The proof contains only a keyed fingerprint, never the API key.
-    return {"test_token": ocr_test_signer.dumps(settings_fingerprint(candidate))}
-
-
-@router.put("/ocr/settings")
-async def update_ocr_settings(request: Request):
-    require_admin(request)
-    try:
-        body = await request.json()
-        with write_lock, closing(connect()) as db:
-            candidate = candidate_ocr_settings(body, get_ocr_settings(db))
-            token = body.get("test_token")
-            if not isinstance(token, str):
-                raise ValueError("请先测试当前模型配置，测试通过后才能保存")
-            try:
-                tested = ocr_test_signer.loads(token, max_age=600)
-            except BadSignature:
-                raise ValueError("测试凭证无效或已过期，请重新测试当前配置") from None
-            if not isinstance(tested, str) or not hmac.compare_digest(tested, settings_fingerprint(candidate)):
-                raise ValueError("配置已变更，请重新测试后保存")
-            save_ocr_settings(db, candidate["endpoint"], candidate["model"], candidate["api_key"])
-            return public_ocr_settings(get_ocr_settings(db))
-    except ValueError as error:
-        return JSONResponse({"error": str(error)}, status_code=400)
 
 
 def ndjson_line(payload):
@@ -297,9 +198,9 @@ async def stream_recognition(form_cm, schema, upload, settings, personal_name, p
                 await form_cm.__aexit__(None, None, None)
 
 
-@router.post("/{section}/ocr")
+@router.post("/entries/{section}/ocr")
 async def recognize_entry(request: Request, section: str):
-    user = require_profile(request)
+    user = require_session_user(request)
     schema = entry_section(section)
     form_cm = request.form(max_files=1, max_fields=1)
     form = await form_cm.__aenter__()
@@ -319,7 +220,7 @@ async def recognize_entry(request: Request, section: str):
         return JSONResponse({"error": error}, status_code=400)
     try:
         with closing(connect()) as db:
-            settings = get_ocr_settings(db)
+            settings = get_ocr_settings(db, user["id"])
             basic = get_basic(db, user["id"])
     except Exception:
         await form_cm.__aexit__(None, None, None)
@@ -343,7 +244,7 @@ def open_saved_paper(user_id, id):
         path = upload_path(user["username"], row["article_pdf"])
         if path.suffix.lower() != ".pdf":
             raise ValueError("重新识别仅支持已保存的 PDF；图片可重新选择上传进行识别")
-        settings = get_ocr_settings(db)
+        settings = get_ocr_settings(db, user_id)
         basic = get_basic(db, user_id)
         try:
             file = path.open("rb")
@@ -352,9 +253,9 @@ def open_saved_paper(user_id, id):
     return UploadFile(file=file, filename=path.name), settings, basic
 
 
-@router.post("/papers/{id}/ocr")
+@router.post("/entries/papers/{id}/ocr")
 async def recognize_saved_paper(request: Request, id: int):
-    user = require_profile(request)
+    user = require_session_user(request)
     try:
         upload, settings, basic = await run_in_threadpool(open_saved_paper, user["id"], id)
     except ValueError as error:
@@ -371,40 +272,39 @@ async def recognize_saved_paper(request: Request, id: int):
     )
 
 
-@router.post("/basic")
+@router.get("/basic/edit")
+def edit_basic(request: Request):
+    user = require_session_user(request)
+    with closing(connect()) as db:
+        basic = get_basic(db, user["id"])
+    return templates.TemplateResponse(request, "_basic_form.html", {
+        "basic": basic, "basic_section": BASIC, "max_upload_mb": MAX_UPLOAD_MB,
+    })
+
+
+@router.put("/basic")
 async def save_basic(request: Request):
-    user = require_profile(request)
+    require_session_user(request)
     async with request.form() as form:
         try:
-            await run_in_threadpool(save_form, user["id"], BASIC, 0, form)
+            entries = await run_in_threadpool(save_form, request, BASIC, 0, form)
         except ValueError as error:
-            return await run_in_threadpool(render_admin, request, error=str(error), submitted=form, status_code=400)
-    return RedirectResponse("/admin?saved=1#basic", status_code=303)
+            return JSONResponse({"error": str(error)}, status_code=400)
+    return table_fragment(request, BASIC, entries)
 
 
-@router.post("/basic/photo/delete")
-def delete_photo(request: Request):
-    user_id = require_profile(request)["id"]
-    with write_lock, closing(connect()) as db:
-        user = profile_user(db, user_id)
-        row = get_basic(db, user_id)
-        delete_upload(user["username"], row["photo"])
-        update_row(db, BASIC, row["id"], {"photo": None, "photo_name": None}, user_id)
-    return RedirectResponse("/admin#basic", status_code=303)
-
-
-@router.get("/{section}/new")
+@router.get("/entries/{section}/new")
 def new_entry(request: Request, section: str):
-    user_id = require_profile(request)["id"]
+    user_id = require_session_user(request)["id"]
     schema = entry_section(section)
     with closing(connect()) as db:
         rows = list_rows(db, schema, user_id)
     return entry_fragment(request, schema, {"id": None}, len(rows) + 1)
 
 
-@router.get("/{section}/{id}/edit")
+@router.get("/entries/{section}/{id}/edit")
 def edit_entry(request: Request, section: str, id: int):
-    user_id = require_profile(request)["id"]
+    user_id = require_session_user(request)["id"]
     schema = entry_section(section)
     with closing(connect()) as db:
         row = require_row(db, schema, id, user_id)
@@ -412,47 +312,47 @@ def edit_entry(request: Request, section: str, id: int):
     return entry_fragment(request, schema, row, entry_position(rows, id))
 
 
-@router.post("/{section}")
+@router.post("/entries/{section}")
 async def create_entry(request: Request, section: str):
-    user_id = require_profile(request)["id"]
+    require_session_user(request)
     schema = entry_section(section)
     async with request.form() as form:
         try:
-            entries = await run_in_threadpool(save_form, user_id, schema, None, form)
+            entries = await run_in_threadpool(save_form, request, schema, None, form)
         except ValueError as error:
             return JSONResponse({"error": str(error)}, status_code=400)
     return table_fragment(request, schema, entries, status_code=201)
 
 
-@router.put("/{section}/{id}")
+@router.put("/entries/{section}/{id}")
 async def save_entry(request: Request, section: str, id: int):
     schema = entry_section(section)
-    user_id = require_profile(request)["id"]
+    require_session_user(request)
     async with request.form() as form:
         try:
-            entries = await run_in_threadpool(save_form, user_id, schema, id, form)
+            entries = await run_in_threadpool(save_form, request, schema, id, form)
         except ValueError as error:
             return JSONResponse({"error": str(error)}, status_code=400)
     return table_fragment(request, schema, entries)
 
 
-@router.delete("/{section}/{id}")
-def delete_entry(request: Request, section: str, id: int):
-    user_id = require_profile(request)["id"]
+@router.post("/entries/{section}/{id}/archive")
+def archive_entry(request: Request, section: str, id: int):
+    require_session_user(request)
     schema = entry_section(section)
     with write_lock, closing(connect()) as db:
-        user = profile_user(db, user_id)
+        user_id = active_session_user(request, db)["id"]
         require_row(db, schema, id, user_id)
-        delete_row(db, schema, id, user_id)
-        delete_entry_dir(user["username"], section, id)
+        archive_row(db, schema, id, user_id)
         entries = list_rows(db, schema, user_id)
     return table_fragment(request, schema, entries)
 
 
-@router.post("/{section}/reorder")
+
+@router.post("/entries/{section}/reorder")
 async def reorder_entries(request: Request, section: str):
     schema = entry_section(section)
-    user_id = require_profile(request)["id"]
+    require_session_user(request)
     try:
         body = await request.json()
     except ValueError:
@@ -461,7 +361,104 @@ async def reorder_entries(request: Request, section: str):
     if not isinstance(ids, list):
         return JSONResponse({"error": "请求格式错误"}, status_code=400)
     try:
-        entries = await run_in_threadpool(reorder_entry_rows, user_id, schema, ids)
+        entries = await run_in_threadpool(reorder_entry_rows, request, schema, ids)
     except ValueError as error:
         return JSONResponse({"error": str(error)}, status_code=400)
     return table_fragment(request, schema, entries)
+
+
+@router.get("/entries/{section}")
+def read_entries(request: Request, section: str):
+    user_id = require_session_user(request)["id"]
+    schema = entry_section(section)
+    with closing(connect()) as db:
+        entries = list_rows(db, schema, user_id)
+    return table_fragment(request, schema, entries)
+
+
+@router.get("/archive")
+def read_archive(request: Request):
+    user_id = require_session_user(request)["id"]
+    with closing(connect()) as db:
+        db.execute("BEGIN")
+        records = [
+            {"section": section.key, "id": row["id"], "title": record_label(section, row),
+             "archived_at": row["archived_at"]}
+            for section in SECTIONS.values() if not section.single
+            for row in list_rows(db, section, user_id, archived=True)
+        ]
+    records.sort(key=lambda row: (row["archived_at"], row["id"]), reverse=True)
+    return records
+
+
+def mutate_archive(request: Request, records, *, deleting: bool) -> None:
+    with write_lock, closing(connect()) as db:
+        user_id = active_session_user(request, db)["id"]
+        try:
+            _recover_archive_deletions(db, user_id=user_id)
+        except (OSError, ValueError, sqlite3.Error) as error:
+            raise ArchiveDeletionPending(
+                "永久删除尚未完成，部分附件可能已移除；删除任务已保留，将在下次操作或重启时继续。请重新加载查看状态。"
+            ) from error
+        active_session_user(request, db)
+        if deleting:
+            delete_archived_rows(db, records, user_id)
+        else:
+            restore_rows(db, records, user_id)
+
+
+async def archive_batch_response(request: Request, *, deleting: bool):
+    require_session_user(request)
+    try:
+        records = parse_archive_records(await request.json())
+    except (ValueError, UnicodeDecodeError) as error:
+        return JSONResponse({"error": str(error)}, status_code=400)
+    try:
+        await run_in_threadpool(mutate_archive, request, records, deleting=deleting)
+    except ArchiveRecordNotFound as error:
+        return JSONResponse({"error": str(error)}, status_code=404)
+    except ArchiveDeletionPending as error:
+        return JSONResponse({"error": str(error)}, status_code=503)
+    except ValueError as error:
+        return JSONResponse({"error": str(error)}, status_code=400)
+    except (OSError, sqlite3.Error):
+        return JSONResponse({"error": "归档操作失败，请重试或重新加载"}, status_code=503)
+    return {"deleted" if deleting else "restored": len(records)}
+
+
+@router.post("/archive/restore")
+async def restore_archive(request: Request):
+    return await archive_batch_response(request, deleting=False)
+
+
+@router.post("/archive/delete")
+async def delete_archive(request: Request):
+    return await archive_batch_response(request, deleting=True)
+
+
+def layout_section(key):
+    section = SECTIONS.get(key)
+    if section is None:
+        raise HTTPException(404)
+    return section
+
+
+@router.get("/layouts/{section}")
+def read_layout(request: Request, section: str):
+    user_id = require_session_user(request)["id"]
+    schema = layout_section(section)
+    with closing(connect()) as db:
+        return get_table_layout(db, schema, user_id)
+
+
+@router.put("/layouts/{section}")
+async def write_layout(request: Request, section: str):
+    require_session_user(request)
+    schema = layout_section(section)
+    try:
+        body = await request.json()
+        with write_lock, closing(connect()) as db:
+            user_id = active_session_user(request, db)["id"]
+            return save_table_layout(db, schema, user_id, body)
+    except ValueError as error:
+        return JSONResponse({"error": str(error)}, status_code=400)

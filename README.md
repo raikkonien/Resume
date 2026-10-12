@@ -1,30 +1,16 @@
 # Resume
 
-个人简历维护、附件存储与只读 MCP 服务，基于 FastAPI。管理员创建个人账号并配置全局 OCR 服务，各个人账号维护自己的独立档案。
+个人简历工作台、附件存储与只读 MCP 服务，基于 FastAPI。每个账号独立维护自己的资料、模型配置和表格布局；账号创建与删除由部署端 CLI 完成。
 
-## 镜像发布状态与前提
+## 公开镜像与运行要求
 
-**本地双架构镜像已构建并验证。** `linux/amd64` 和 `linux/arm64` 已完成空目录启动、管理员登录、容器重建及 PDF 导出验证；109 项回归测试通过。发布源码仓库为 [raikkonien/Resume](https://github.com/raikkonien/Resume)，镜像地址为 `ghcr.io/raikkonien/resume:latest`。首次公开发布需要 Actions 构建成功、Package 可见性设为 **Public**，并完成无鉴权拉取验证；下方 GHCR 安装命令以这些条件完成为前提。发布状态可在仓库 Actions 与 Packages 页面查看；尚未公开时可使用下方离线包。若发布至其他账号或仓库，请将 `raikkonien/resume` 换成实际的小写 `owner/repository`。
+源码：[raikkonien/Resume](https://github.com/raikkonien/Resume)。公开镜像：`ghcr.io/raikkonien/resume:latest`，支持 `linux/amd64` / `linux/arm64`，Docker 自动选择宿主机架构。
+
+当前工作台包含首页统计与旋转星图、简历表格与录入模态、个人设置与归档批量恢复/彻底删除。推送 `main` 后，GitHub Actions 先执行隔离验收，再发布新镜像；发布进度及结果见 [Actions](https://github.com/raikkonien/Resume/actions/workflows/publish-image.yml)。部署前执行 `docker pull` 获取当前已发布版本；`latest` 是可变标签，源码提交不代表镜像已经发布成功。
 
 宿主机需安装并启动 Docker Engine；macOS / Windows 可安装 Docker Desktop，Windows 使用 Linux 容器。可选的 Compose 用法需要 Docker Compose v2。发行目标为 `linux/amd64` 和 `linux/arm64`，发布命令会同时构建这两种架构。
 
 使用公开镜像时只需一个可写的宿主机目录：它挂载至容器 `/data`，保存数据库、账号、附件、OCR 配置和会话密钥。无需源码、`.env`、预设管理员密码、Token 或 UID/GID 配置。Dockerfile 构建上下文采用白名单，镜像不包含宿主机 `data/`、`.env` 或 Git 历史。
-
-### 现在使用离线镜像包
-
-本次提供的离线镜像包不含个人数据。Intel / AMD 电脑（含常见 Windows、Linux、Intel Mac）使用 `dist/resume-amd64.tar.gz`，Apple Silicon 或 ARM64 Linux 使用 `dist/resume-arm64.tar.gz`。以下以 amd64 为例；ARM64 只需替换导入文件名，镜像名和目录挂载方式相同：
-
-```sh
-docker load --input resume-amd64.tar.gz
-mkdir -p "$HOME/resume-data"
-docker run -d --name resume \
-  --publish 127.0.0.1:18081:8000 \
-  --mount "type=bind,source=$HOME/resume-data,target=/data" \
-  resume:distribution
-```
-
-Windows 导入命令相同，启动时沿用下方 PowerShell 的路径写法。下载地址：[GitHub Releases](https://github.com/raikkonien/Resume/releases)。单架构包也适用于旧版 Docker，避免加载多架构归档时丢失目标架构；直接从 GHCR 拉取则自动选择对应架构。`dist/resume-source.zip` 是不含数据、密钥及本地规划记录的发布源码包；镜像包和源码包均不应提交到 Git 仓库。`dist/SHA256SUMS` 用于校验这些文件。
-
 
 ## 安装：一个目录、一个容器
 
@@ -34,6 +20,7 @@ Windows 导入命令相同，启动时沿用下方 PowerShell 的路径写法。
 
 ```sh
 mkdir -p "$HOME/resume-data"
+docker pull ghcr.io/raikkonien/resume:latest
 docker run -d --name resume \
   --publish 127.0.0.1:18081:8000 \
   --mount "type=bind,source=$HOME/resume-data,target=/data" \
@@ -47,6 +34,7 @@ docker run -d --name resume \
 ```powershell
 $DataPath = Join-Path $HOME "resume-data"
 New-Item -ItemType Directory -Force -Path $DataPath | Out-Null
+docker pull ghcr.io/raikkonien/resume:latest
 docker run -d --name resume `
   --publish 127.0.0.1:18081:8000 `
   --mount "type=bind,source=$DataPath,target=/data" `
@@ -57,21 +45,36 @@ docker run -d --name resume `
 
 ### 首次登录
 
-访问 <http://localhost:18081>，从日志取得初始管理员密码：
+访问 <http://localhost:18081>，从日志取得初始账号密码：
 
 ```sh
 docker logs resume
 ```
 
-全新空目录只创建管理员 `admin`，生成独立随机密码，日志中显示 `首次启动管理员账号 admin，初始密码（仅显示一次）`。应用只在第一次成功初始化时输出一次，不会在重启时再次生成；旧容器日志仍可能保留该条消息。请妥善保存密码，不要公开日志。
+全新空目录只创建 `admin`，它是有独立简历和空模型设置的普通账号。初始随机密码只在首次成功初始化日志显示一次；旧容器日志可能仍保留该条消息。请妥善保存密码，不要公开日志。
 
-使用 `admin` 登录，在「系统管理 → 用户管理」中：
+使用 `admin` 登录，在「设置 → 账号」填写当前密码，修改用户名或密码；成功变更后重新登录。密码为 8–256 位，建议使用长随机密码。用户名为 3–32 位小写英文字母、数字、下划线或连字符，以字母开头。
 
-1. 修改管理员密码，保存后重新登录。密码为 8–256 位，建议使用长随机密码。
-2. 创建自己的个人账号。用户名为 3–32 位小写英文字母、数字、下划线或连字符，以字母开头。
-3. 退出管理员，使用个人账号登录，维护新建的空白个人档案。
+部署端通过交互式 CLI 管理账号，不在 Web 页面管理他人：
 
-管理员负责账号与全局 OCR 设置，不提供个人档案；`admin` 不能改名或删除。账号改名或重设密码会使该账号的现有登录失效。删除个人账号会永久删除其全部资料和附件。
+```sh
+docker exec -it resume python -m app.accounts create colleague
+docker exec -it resume python -m app.accounts reset-password colleague
+docker exec -it resume python -m app.accounts delete colleague
+```
+
+创建和重置会两次提示输入密码，不接收命令行密码；删除要求键入完整用户名。无效输入返回非零且不改已有账号。删除账号会永久删除该账号全部资料和附件，执行前完整备份。`admin` 可改名和删除，与其他账号规则相同；改名或改密使该账号所有现有登录失效，既有 MCP Token 仍绑定同一稳定账号 ID。
+
+### 工作台
+
+- **首页 `/`**：真实记录、栏目及业务年份星座图；可选共享作者/单位关联只按结构化填写文本匹配；最近 10 次成功修改；当年构成与近三个自然年堆叠数量。基本信息不计数量，跨年记录只计业务发生年一次。软著按登记日期、标准按发布日期；未填有效日期单列，不从编号、录入时间或附件猜年份。
+  星图默认缓慢旋转，悬停或拖动时暂停；悬停节点/连线时，圆点沿真实关联线流动。提供暂停/继续、重置与放大视图，保留滚轮缩放和拖动平移，不再显示独立放大/缩小按钮。系统“减少动态效果”关闭旋转与流动动画，页面隐藏或图表可见面积低于 10% 时停止动画；默认只标注本人/栏目，其余标签、日期与依据通过悬停和下方键盘入口查看。
+- **简历 `/resume`**：概览与 18 个栏目标签共用唯一全字段表格。全局字面搜索覆盖隐藏字段、作者单位/身份和原附件名；搜索/图表定位暂时挂起栏目筛选。列顺序、显隐、类型筛选、表头排序按账号自动保存；手动模式可拖行，过滤后拖动仍提交完整活动列表。新建/编辑使用同一草稿模态，识别不自动保存。业务模态字段使用 1Password 官方 `data-1p-ignore` 标记并关闭自动填充；登录与账号密码表单保留正常密码管理器支持。
+- **设置 `/settings`**：本人账号、本人文档识别模型、归档管理。简历中的删除即归档，附件保留；归档行从首页、详情、PDF、MCP 和原下载 URL 隐藏。归档表格支持勾选、全选、单条或批量恢复，以及红底白字的“彻底删除”。恢复使用同一 ID/附件并放在活动列表末尾；彻底删除经确认后移除数据库记录、全部附件及对应修改记录，无法撤销。基本信息单例只能编辑。
+
+概览导出始终包含全部活动资料和手动行序，不受搜索、隐藏列或表头排序影响。旧 `/admin` 及跨账号管理接口已移除，无兼容入口。
+
+归档批量操作在开始前整体校验账号归属和归档状态，无效、失效或越权记录使整批请求拒绝。彻底删除使用持久任务协调数据库与附件；存储故障会明确提示未完成，部分附件可能已移除。后续归档/账号请求只重试当前账号的归档删除任务，其他账号的失败任务不会阻断本人的操作；应用启动时重试全部账号的任务。确认彻底删除后，不应将失败提示理解为可以撤销删除。
 
 镜像自带健康检查，无需安装 `curl`。`docker ps` 会显示 `starting` / `healthy` / `unhealthy`；详细状态可查看：
 
@@ -83,13 +86,14 @@ docker inspect --format '{{json .State.Health}}' resume
 
 ## 可选 OCR 与 MCP
 
-### OCR：在管理员界面配置
+### OCR：每个账号自行配置
 
-在「系统管理 → OCR模型设置」填写 OpenAI 兼容 Chat Completions 接口的完整地址（例如 `https://your-service.example/v1/chat/completions`）、模型名称及可选 API Key。**先测试当前配置，测试成功后才能保存**。所有个人账号共用这份配置，保存在 `/data/resume.db`，升级和重启后保留。
+在「设置 → LLM / 文档识别」填写 OpenAI 兼容 Chat Completions 接口的完整地址（例如 `https://your-service.example/v1/chat/completions`）、模型名称及可选 API Key。**先测试当前候选，测试成功后才能保存**；修改候选后需要重测。配置和测试票据都绑定本人账号与当前会话，不借用其他账号的密钥。
 
-已保存 API Key 不回显明文，留空保留原 Key，也可勾选清除。镜像不包含 OCR 模型，新安装的 OCR 默认未配置。管理员需提供从容器网络可访问、支持文档图像内容的兼容视觉 API、模型名称及其所需的 API Key。容器中的 `localhost` 指容器自己；连接 Docker Desktop 宿主机服务通常使用 `host.docker.internal`，Linux 需按实际网络配置可达地址。手工录入、附件上传和 PDF 导出不需要模型服务。
+已保存 API Key 不回显明文，留空保留本人原 Key，也可勾选清除。镜像不包含 OCR 模型，新安装的 OCR 默认未配置。本人需提供从容器网络可访问、支持文档图像与 JSON 返回的兼容视觉 API。容器中的 `localhost` 指容器自己；连接 Docker Desktop 宿主机服务通常使用 `host.docker.internal`，Linux 需按实际网络配置可达地址。手工录入、附件上传和 PDF 导出不需要模型服务。
 
 OCR 会把所选文档内容发送至指定服务，配置前确认服务可信、数据使用约定符合要求。数据库备份包含 OCR API Key，应按敏感资料保护。
+API Key 当前以明文保存在 SQLite，备份须按秘密保护。部署账号应受信任；本人配置的端点可以访问容器可达网络，不代表已经提供网络隔离或静态加密。
 
 ### MCP：只读服务，当前没有 Token 管理界面
 
@@ -105,7 +109,7 @@ MCP 提供当前鉴权用户的简历与附件只读访问。**当前管理 UI �
 
 ```text
 /data/
-  resume.db                 # SQLite：账号、资料、OCR 设置、MCP 凭据等
+  resume.db                 # SQLite：账号、资料、个人模型、归档/事件/布局、MCP 凭据
   .session-key              # SECRET_KEY 未指定时自动创建的持久会话密钥
   <username>/               # 各个人账号附件目录
     <section>/<entry-id>/   # 按板块、记录保存附件
@@ -131,7 +135,9 @@ SQLite 运行时可能产生日志或辅助文件；备份应包含**整个目�
 
 旧版无账号数据（包括旧 `uploads/`）首次迁移需要 `ADMIN_PASSWORD`，否则应用会拒绝启动以避免错误归属。迁移创建个人账号 `zhangrui`，把旧资料及附件归属到该账号，并独立创建 `admin`；可选 `MCP_TOKEN` 也仅绑定 `zhangrui`。空目录不设置 `ADMIN_PASSWORD`，就不会创建该旧账号。
 
-先停止旧应用并完整备份，以**备份副本**和独立容器测试迁移，再安排实际切换。不要让新旧实例同时写同一数据目录，不要把真实数据或原 `.env` 用作构建上下文或发布文件。迁移控制变量不负责重设已存在的账号或 Token，之后通过管理页修改账号密码。
+已有账号库升级在单个事务内移除账号角色、增加归档/修改事件/布局和业务日期，保留账号 ID、密码/Token hash、会话版本、历史字段、排序和附件路径。旧全局模型只转给唯一现存个人账号，其余为空；若有多个个人账号，原配置只保留给旧 `admin`。非空旧配置归属无法确定时停止升级，不猜接收者。升级要求 SQLite ≥3.35；新增日期保持空，旧记录不伪造修改历史。重复初始化不覆盖个人设置。
+
+先停止旧应用并完整备份，以**备份副本**和独立容器测试迁移，再安排实际切换。不要让新旧实例同时写同一数据目录，不要把真实数据或原 `.env` 用作构建上下文或发布文件。迁移控制变量不负责重设已存在的账号或 Token，之后通过本人设置页或部署 CLI 修改账号密码。
 
 ## 停止、启动与安全升级
 
@@ -179,7 +185,7 @@ docker inspect --format '{{json .State.Health}}' resume
 
 ## Compose（可选）
 
-只需取得本仓库的 `docker-compose.yml`，无需下载应用源码或创建 `.env`。默认使用预期 GHCR 镜像、`./data:/data` 和 `127.0.0.1:18081:8000`，继承镜像健康检查，无自动重启。以下命令同样以首次公开发布已完成为前提：
+只需取得本仓库的 `docker-compose.yml`，无需下载应用源码或创建 `.env`。默认使用公开 GHCR 镜像、`./data:/data` 和 `127.0.0.1:18081:8000`，继承镜像健康检查，无自动重启：
 
 ```sh
 mkdir -p ./data
@@ -208,7 +214,7 @@ DATA_PATH="$HOME/resume-data" IMAGE=resume:local docker compose up -d --pull nev
 
 ## 从源码构建与双架构发布
 
-本地构建与运行已验证，下面的上传操作尚未执行。源码构建需 Docker 和仓库的 `Dockerfile`、`requirements.txt`、`requirements.lock`、`app/`：
+需要自定义或离线使用时，可从源码构建。构建需 Docker 和仓库的 `Dockerfile`、`requirements.txt`、`requirements.lock`、`app/`：
 
 ```sh
 docker build -t resume:local .
@@ -245,4 +251,30 @@ docker buildx build --platform linux/amd64,linux/arm64 \
   --tag "$IMAGE:latest" --push .
 ```
 
-上述凭据读取示例用于 Bash；已有 buildx builder 可直接选择使用，无需重复创建。也可增加实际版本标签后推送，以便固定版本。首次推送后在 GitHub Package 设置中确认可见性为 **Public**，再检查双架构 manifest、无鉴权拉取、空目录初始登录、健康状态及重建后的数据保留，完成后再宣布镜像可安装。自动发布流程见 `.github/workflows/`；实际触发条件以 workflow 文件为准。公开前请使用离线包，不要把私有 Package 地址当作可匿名安装的镜像。
+上述凭据读取示例用于 Bash；已有 buildx builder 可直接选择使用，无需重复创建。也可增加实际版本标签后推送，以便固定版本。首次推送后在 GitHub Package 设置中确认可见性为 **Public**，再检查双架构 manifest、无鉴权拉取、空目录初始登录、健康状态及重建后的数据保留，完成后再宣布镜像可安装。自动发布流程见 `.github/workflows/`；实际触发条件以 workflow 文件为准。离线机器可在联网机器上拉取对应架构镜像、使用 `docker save` 导出，再用 `docker load` 导入；历史 Release 附件仅代表对应版本。
+
+## 源码回归验收
+
+使用已具备锁定依赖的镜像，只读挂载新源码和测试，临时数据独立于生产；不需要构建镜像。以下只运行回归，不启动或迁移生产服务：
+
+```sh
+docker run --rm --network none --read-only \
+  --tmpfs /tmp:rw --tmpfs /data:rw --workdir /workspace \
+  --mount "type=bind,source=$PWD/app,target=/workspace/app,readonly" \
+  --mount "type=bind,source=$PWD/tests,target=/workspace/tests,readonly" \
+  -e DATA_DIR=/data -e PYTHONDONTWRITEBYTECODE=1 \
+  -e SECRET_KEY=isolated-workspace-test-signing-key \
+  -e ADMIN_PASSWORD=test-admin-password \
+  -e INITIAL_ADMIN_PASSWORD=test-bootstrap-admin -e MCP_TOKEN=test-mcp-token \
+  ghcr.io/raikkonien/resume:latest \
+  python -m unittest discover -s tests -v
+```
+
+界面验收另起回环随机端口容器，使用合成记录和临时 `/data`；不要挂载生产数据或真实 `.env`。外部模型未实测时，受控上游结果不能作为真实 LLM 验收结论。
+
+## 第三方资源许可
+
+- [Apache ECharts 5.6.0](https://github.com/apache/echarts/tree/5.6.0)：固定版本浏览器图表包，Apache-2.0；许可和声明位于 `app/static/vendor/LICENSE`、`NOTICE`。其中 d3 派生代码的 BSD-3-Clause 完整许可保存在 `app/static/vendor/licenses/LICENSE-d3`。
+- [Tabler Icons](https://github.com/tabler/tabler-icons)：上传控件的 SVG 图标，MIT；完整许可保存在 `app/static/vendor/licenses/LICENSE-tabler-icons`。
+
+以上许可文件与源码一起进入应用镜像，重新分发时须保留。

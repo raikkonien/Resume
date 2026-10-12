@@ -1,3 +1,4 @@
+{% from "macros.html" import icon %}
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -5,15 +6,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}个人简历{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}?v={{ asset_versions['style.css'] }}">
+  <script type="importmap">{{ {"imports": {"resume-table": url_for('static', path='table.js') | string ~ '?v=' ~ asset_versions.get('table.js', ''), "resume-editor": url_for('static', path='admin.js') | string ~ '?v=' ~ asset_versions['admin.js']}} | tojson }}</script>
   {% block scripts %}{% endblock %}
 </head>
-<body>
+<body{% if request.state.user %} class="workspace"{% endif %}>
   <a class="skip-link" href="#main">跳转到内容</a>
   <header class="site-header">
-    <a class="brand" href="{{ '/admin' if request.state.user and request.state.user.role == 'admin' else '/' }}">个人档案<span>RESUME</span></a>
-    <nav aria-label="主导航">{% if request.state.user %}<span class="account-name">{{ request.state.user.username }}</span>{% endif %}{% block nav %}{% endblock %}</nav>
+    <a class="brand" href="/" data-leave>{{ icon('resume') }}个人简历</a>
+    {% if request.state.user %}<div class="account-controls"><span class="account-name">{{ request.state.user.username }}</span><form method="post" action="/logout" data-leave><button class="quiet" type="submit">{{ icon('logout') }}退出</button></form></div>{% endif %}
   </header>
-  <main id="main" class="container">{% block content %}{% endblock %}</main>
-  <footer class="site-footer">个人简历 · 私有资料库</footer>
+  {% if request.state.user %}
+  <nav class="workspace-nav" aria-label="主导航">
+    {% for key, href, label, glyph in [('home','/','首页','home'),('resume','/resume','简历','resume'),('settings','/settings','设置','settings')] %}
+    <a href="{{ href }}" data-leave{% if active_nav == key %} class="active" aria-current="page"{% endif %}>{{ icon(glyph) }}<span>{{ label }}</span></a>
+    {% endfor %}
+  </nav>
+  {% endif %}
+  <main id="main" class="container" tabindex="-1">{% block content %}{% endblock %}</main>
 </body>
 </html>

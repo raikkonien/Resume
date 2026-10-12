@@ -29,6 +29,8 @@ class Section:
     label: str
     fields: tuple[Field, ...]
     single: bool = False
+    title_field: str = ""
+    year_fields: tuple[str, ...] = ()
 
 
 IMG = ".jpg,.jpeg,.png"
@@ -57,7 +59,7 @@ BASIC = Section("basic", "个人基本信息", (
     Field("address", "单位地址", "text"),
     Field("postcode", "邮政编码", "text"),
     Field("photo", "照片", "file", accept=IMG),
-), single=True)
+), single=True, title_field="name")
 
 ENTRY_SECTIONS = (
     Section("work", "工作与职称", (
@@ -65,7 +67,7 @@ ENTRY_SECTIONS = (
         Field("end_date", "结束时间", "date"),
         Field("employer", "工作单位", "text"),
         Field("title", "取得职称", "text"),
-    )),
+    ), title_field="employer", year_fields=("begin_date",)),
     Section("contracts", "合同", (
         Field("identifier", "合同标识", "select", ("订立", "续订")),
         Field("type", "合同类型", "select", ("聘用合同",)),
@@ -73,7 +75,7 @@ ENTRY_SECTIONS = (
         Field("end_date", "合同终止日期", "date", date_format="YYYY.MM.DD"),
         Field("terms", "合同约定事项", "textarea"),
         Field("contract_pdf", "合同 PDF", "file", accept=".pdf"),
-    )),
+    ), title_field="type", year_fields=("begin_date",)),
     Section("annual_reviews", "年度考核", (
         Field("category", "考核类别", "select", ("年度考核",)),
         Field("year", "考核年度", "select", year_from=2010),
@@ -81,7 +83,7 @@ ENTRY_SECTIONS = (
         Field("ungraded_reason", "参加考核不定等次原因", "text"),
         Field("absent_reason", "未参加考核原因", "text"),
         Field("advanced_type", "先进类型", "select", ("校级先进", "院级先进")),
-    )),
+    ), title_field="year", year_fields=("year",)),
     Section("appointments", "党政职务", (
         Field("department", "任职部门", "text"),
         Field("status", "当前任职状况", "select", ("在任", "不在任")),
@@ -89,13 +91,13 @@ ENTRY_SECTIONS = (
         Field("level", "职务级别", "select", ("正科级", "副科级", "正处级", "副处级")),
         Field("begin_date", "任现职时间", "date", date_format="YYYY.MM.DD"),
         Field("end_date", "免职日期", "date", date_format="YYYY.MM.DD"),
-    )),
+    ), title_field="name", year_fields=("begin_date",)),
     Section("positions", "岗位设置", (
         Field("level", "岗位级别", "text"),
         Field("begin_date", "起聘时间", "date", date_format="YYYY.MM.DD"),
         Field("employer", "聘任单位", "select", ("浙江大学",)),
         Field("change_type", "变动类型", "select", ("聘岗", "职称")),
-    )),
+    ), title_field="level", year_fields=("begin_date",)),
     Section("education", "学习", (
         Field("begin_date", "开始时间", "date"),
         Field("end_date", "结束时间", "date"),
@@ -108,7 +110,7 @@ ENTRY_SECTIONS = (
         Field("full_time", "是否全日制", "checkbox"),
         Field("degree_cert", "学位证书", "file", accept=DOC),
         Field("diploma_cert", "学历证书", "file", accept=DOC),
-    )),
+    ), title_field="school", year_fields=("begin_date",)),
     Section("papers", "文章", (
         Field("year", "年份", "year"),
         Field("journal", "杂志", "text"),
@@ -125,7 +127,7 @@ ENTRY_SECTIONS = (
         Field("jcr_quartile", "JCR 分区", "select", ("Q1", "Q2", "Q3", "Q4")),
         Field("authors", "作者", "authors"),
         Field("article_pdf", "文章附件", "file", accept=DOC),
-    )),
+    ), title_field="title", year_fields=("year",)),
     Section("patents", "专利", (
         Field("region", "专利地", "select", ("国内", "国际")),
         Field("category", "专利类别", "select", ("发明专利", "实用新型专利", "外观设计专利")),
@@ -138,15 +140,16 @@ ENTRY_SECTIONS = (
         Field("apply_date", "专利申请日期", "date"),
         Field("rank", "本人排名", "rank"),
         Field("certificate", "专利证书", "file", accept=DOC),
-    )),
+    ), title_field="name", year_fields=("grant_date", "apply_date")),
     Section("software", "软件著作", (
         Field("name", "软件名称", "text"),
         Field("holder", "著作权人", "text"),
         Field("reg_number", "登记号", "text"),
+        Field("reg_date", "登记日期", "date"),
         Field("cert_number", "证书号", "text"),
         Field("rank", "本人排名", "rank"),
         Field("certificate", "软件著作证书", "file", accept=DOC),
-    )),
+    ), title_field="name", year_fields=("reg_date",)),
     Section("projects", "课题", (
         Field("begin_date", "开始时间", "date"),
         Field("end_date", "结束时间", "date"),
@@ -162,7 +165,7 @@ ENTRY_SECTIONS = (
         Field("contract", "合同", "file", accept=DOC),
         Field("fund_proof", "经费到账证明", "file", accept=DOC),
         Field("close_proof", "结题证明", "file", accept=DOC),
-    )),
+    ), title_field="name", year_fields=("begin_date",)),
     Section("transfers", "成果转化", (
         Field("name", "成果名称", "text"),
         Field("type", "成果类型", "select", ("专利", "软著")),
@@ -172,7 +175,7 @@ ENTRY_SECTIONS = (
         Field("sign_date", "合同签订日期", "date"),
         Field("contract", "合同", "file", accept=DOC),
         Field("payment_proof", "到账证明", "file", accept=DOC),
-    )),
+    ), title_field="name", year_fields=("sign_date",)),
     Section("books", "论著", (
         Field("title", "专著题目", "text"),
         Field("editor", "编辑", "text"),
@@ -186,7 +189,7 @@ ENTRY_SECTIONS = (
         Field("authors", "作者", "text"),
         Field("first_page", "书首页", "file", accept=DOC),
         Field("title_page", "书扉页", "file", accept=DOC),
-    )),
+    ), title_field="title", year_fields=("pub_date",)),
     Section("memberships", "社会兼职", (
         Field("society", "学协会名称", "text"),
         Field("committee", "专委会名称", "text"),
@@ -195,21 +198,22 @@ ENTRY_SECTIONS = (
         Field("begin_month", "聘期开始", "month"),
         Field("end_month", "聘期结束", "month"),
         Field("certificate", "证书", "file", accept=DOC),
-    )),
+    ), title_field="society", year_fields=("begin_month",)),
     Section("standards", "团体/行业标准", (
         Field("name", "标准名称", "text"),
         Field("category", "标准类别", "select", ("团体标准", "行业标准")),
         Field("number", "编号", "text"),
+        Field("publish_date", "发布日期", "date"),
         Field("rank", "本人排名", "rank"),
         Field("document", "标准文件", "file", accept=DOC),
-    )),
+    ), title_field="name", year_fields=("publish_date",)),
     Section("trainings", "培训学习", (
         Field("begin_date", "开始时间", "date"),
         Field("end_date", "结束时间", "date"),
         Field("organizer", "培训单位", "text"),
         Field("content", "培训内容", "textarea"),
         Field("certificate", "证书", "file", accept=DOC),
-    )),
+    ), title_field="content", year_fields=("begin_date",)),
     Section("conferences", "学术会议", (
         Field("type", "学术会议类型", "select", ("参加国内学术会议", "参加国际学术会议")),
         Field("name", "会议名称", "text"),
@@ -220,16 +224,57 @@ ENTRY_SECTIONS = (
         Field("organizer", "主办单位", "text"),
         Field("submission", "会议投稿", "file", accept=DOC),
         Field("certificate", "会议相关证书", "file", accept=DOC),
-    )),
+    ), title_field="name", year_fields=("begin_date",)),
     Section("licenses", "执业资格", (
         Field("name", "职业资格名称", "text"),
         Field("begin_date", "开始日期", "date"),
         Field("validity", "有效期", "text"),
         Field("issuer", "颁发单位", "text"),
         Field("certificate", "证书", "file", accept=DOC),
-    )),
+    ), title_field="name", year_fields=("begin_date",)),
 )
 SECTIONS = {section.key: section for section in (BASIC, *ENTRY_SECTIONS)}
+
+
+def event_year(section: Section, row: Mapping[str, Any]) -> int | None:
+    """Return the first valid business year, never an entry's storage timestamp."""
+    fields = {field.key: field for field in section.fields}
+    for key in section.year_fields:
+        field = fields[key]
+        value = row.get(key)
+        if isinstance(value, bool):
+            continue
+        try:
+            if field.type == "year" or (field.type == "select" and field.year_from is not None):
+                if isinstance(value, int):
+                    year = value
+                elif isinstance(value, str) and re.fullmatch(r"[0-9]{4}", value):
+                    year = int(value)
+                else:
+                    continue
+            elif field.type == "date":
+                if not isinstance(value, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+                    continue
+                year = date.fromisoformat(value).year
+            elif field.type == "month":
+                if not isinstance(value, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}", value):
+                    continue
+                year = date.fromisoformat(value + "-01").year
+            else:
+                continue
+        except ValueError:
+            continue
+        if 1900 <= year <= 2100:
+            return year
+    return None
+
+
+def record_label(section: Section, row: Mapping[str, Any]) -> str:
+    if section.single:
+        return "个人基本信息"
+    value = row.get(section.title_field)
+    title = str(value).strip() if value is not None else ""
+    return (title or f"{section.label} #{row.get('id', '')}")[:120]
 
 
 def validate_authors(value: Any) -> list[dict[str, Any]]:

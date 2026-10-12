@@ -6,10 +6,11 @@ from unittest.mock import patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.exceptions import HTTPException
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.staticfiles import StaticFiles
 
-from app import admin, auth, db, management, view
+from app import admin, auth, dashboard, db, management, view
 from app.config import ADMIN_PASSWORD
 from app.templating import STATIC_DIR
 
@@ -27,12 +28,14 @@ def isolated_store(case):
 
 def http_client(case, username="zhangrui", password=None):
     app = FastAPI()
+    app.add_exception_handler(HTTPException, auth.http_error_response)
     app.add_middleware(auth.AuthMiddleware)
     app.add_middleware(SessionMiddleware, secret_key="isolated-test-session-key",
                        session_cookie="resume_session")
     app.include_router(auth.router)
     app.include_router(management.router)
     app.include_router(admin.router)
+    app.include_router(dashboard.router)
     app.include_router(view.router)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     client = case.enterContext(TestClient(app))
