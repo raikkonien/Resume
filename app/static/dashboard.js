@@ -579,14 +579,18 @@ function renderRecent() {
   list.hidden = payload.recent.length === 0;
   for (const event of payload.recent) {
     const item = element('li');
-    const heading = element('div');
-    heading.append(element('span', ACTION_LABELS[event.action], 'recent-action'),
+    const heading = element('div', undefined, 'recent-meta');
+    const kind = element('span', undefined, 'recent-kind');
+    kind.append(element('span', ACTION_LABELS[event.action], 'recent-action'),
       element('span', sectionLabel(event.section_key), 'recent-section'));
-    const title = link(event.title, event.href, 'recent-title');
+    const title = element('span', event.title, 'recent-title');
     const date = eventDate(event.occurred_at);
     const time = element('time', date ? relativeTime(date) : '时间未填写', 'recent-time');
     if (date) { time.dateTime = event.occurred_at; time.title = localTime(date); }
-    item.append(heading, title, time);
+    heading.append(kind, time);
+    const entry = link('', event.href);
+    entry.append(heading, title);
+    item.append(entry);
     list.append(item);
   }
   clearInterval(recentTimer);
