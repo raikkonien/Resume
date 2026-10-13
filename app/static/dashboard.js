@@ -1,9 +1,9 @@
 const SECTION_COLORS = [
-  '#0284c7', '#0891b2', '#0d9488', '#059669', '#4d7c0f', '#a16207',
-  '#d97706', '#ea580c', '#dc2626', '#be185d', '#9333ea', '#7c3aed',
-  '#4f46e5', '#2563eb', '#475569', '#0f766e', '#6d28d9',
+  '#3a645e', '#577184', '#7b6a51', '#6b6886', '#657752', '#896365',
+  '#4b7278', '#8b704e', '#6b717a', '#775e7a', '#5e766a', '#7f6b56',
+  '#536686', '#906957', '#587158', '#7f6871', '#4a687c',
 ];
-const YEAR_COLORS = ['#93c5fd', '#22b8cf', '#0369a1'];
+const YEAR_COLORS = ['#7e9994', '#537f77', '#316963'];
 const ACTION_LABELS = {create:'新建', update:'修改', archive:'归档', restore:'恢复', reorder:'调整顺序'};
 const KIND_LABELS = {self:'本人', section:'栏目', record:'记录', year:'业务年份', author:'作者', organization:'单位'};
 const EDGE_LABELS = {section:'本人与栏目', record:'栏目与记录', year:'业务年份', author:'共同作者', organization:'共同单位'};
@@ -25,6 +25,31 @@ let disposed = false;
 let recentTimer = null;
 let edgesByNode = new Map();
 let resizeFrame = null;
+let chartTheme;
+const LOADING_IDS = ['graph-loading', 'recent-loading', 'annual-loading', 'history-loading'];
+
+function readChartTheme() {
+  const style = getComputedStyle(document.documentElement);
+  const theme = Object.fromEntries(['accent', 'ink', 'muted', 'surface', 'line', 'bg']
+    .map(key => [key, style.getPropertyValue(`--${key}`).trim()]));
+  return {...theme, fontFamily:getComputedStyle(document.body).fontFamily};
+}
+function textOnFill(fill) {
+  const luminance = color => {
+    const [red, green, blue] = window.echarts.color.parse(color);
+    const linear = [red, green, blue].map(value => {
+      const channel = value / 255;
+      return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+    });
+    return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+  };
+  const background = luminance(fill);
+  const contrast = color => {
+    const foreground = luminance(color);
+    return (Math.max(background, foreground) + 0.05) / (Math.min(background, foreground) + 0.05);
+  };
+  return contrast(chartTheme.ink) >= contrast(chartTheme.surface) ? chartTheme.ink : chartTheme.surface;
+}
 
 function element(tag, text, className) {
   const node = document.createElement(tag);
@@ -69,16 +94,16 @@ function wrapText(value, width = 36) {
 function tooltipOptions(formatter, trigger = 'item') {
   return {
     trigger, renderMode:'richText', confine:true, formatter,
-    backgroundColor:'#ffffff', borderColor:'#e5e7eb', borderWidth:1,
-    textStyle:{color:'#111827', fontSize:13, lineHeight:20},
-    ...(trigger === 'axis' ? {axisPointer:{type:'shadow'}} : {}),
+    backgroundColor:chartTheme.surface, borderColor:chartTheme.line, borderWidth:1,
+    textStyle:{color:chartTheme.ink, fontFamily:chartTheme.fontFamily, fontSize:13, lineHeight:20},
+    ...(trigger === 'axis' ? {axisPointer:{type:'shadow', shadowStyle:{color:chartTheme.bg}}} : {}),
   };
 }
 function sectionLabel(key) { return key === 'basic' ? '个人基本信息' : sections.get(key)?.label || key || '—'; }
-function sectionColor(key) { return sections.get(key)?.color || '#64748b'; }
+function sectionColor(key) { return sections.get(key)?.color || chartTheme.muted; }
 function commonOptions() {
   return {animation:!motion.matches, animationDuration:220, animationDurationUpdate:180,
-    textStyle:{fontFamily:'system-ui, -apple-system, sans-serif', color:'#64748b'}};
+    textStyle:{fontFamily:chartTheme.fontFamily, color:chartTheme.muted}};
 }
 
 const resizeObserver = new ResizeObserver(() => {
@@ -175,7 +200,7 @@ function graphOption() {
     });
   }
   const symbols = {self:28, section:21, record:10, year:18, author:15, organization:15};
-  const colors = {self:'#111827', year:'#94a3b8', author:'#a855f7', organization:'#14b8a6'};
+  const colors = {self:chartTheme.ink, year:chartTheme.muted, author:'#846887', organization:chartTheme.accent};
   return {
     ...commonOptions(), animation:false,
     tooltip:tooltipOptions(graphTooltip),
@@ -187,12 +212,12 @@ function graphOption() {
       force:{repulsion:1500, edgeLength:[180,300], gravity:0.08, friction:0.6, layoutAnimation:false},
       data:visibleNodes.map(node => ({...node, name:node.label, ...positionById.get(node.id),
         symbol:node.kind === 'organization' ? 'roundRect' : 'circle', symbolSize:symbols[node.kind],
-        itemStyle:{color:node.section ? sectionColor(node.section) : colors[node.kind], borderColor:'#ffffff', borderWidth:1},
+        itemStyle:{color:node.section ? sectionColor(node.section) : colors[node.kind], borderColor:chartTheme.surface, borderWidth:1},
         label:{show:['self','section'].includes(node.kind), formatter:() => node.kind === 'year' ? String(node.year) : tooltipText(node.label),
-          fontSize:11, color:'#475569', position:'right', width:110, overflow:'truncate'},
+          fontSize:11, color:chartTheme.ink, position:'right', width:110, overflow:'truncate'},
       })),
       links:payload.graph.edges.filter(edge => visibleIds.has(edge.source) && visibleIds.has(edge.target)).map(edge => ({...edge,
-        lineStyle:{color:edge.kind === 'year' ? '#cbd5e1' : edge.kind === 'author' ? '#c084fc' : edge.kind === 'organization' ? '#5eead4' :
+        lineStyle:{color:edge.kind === 'year' ? chartTheme.line : edge.kind === 'author' ? colors.author : edge.kind === 'organization' ? colors.organization :
           sectionColor(nodeById.get(edge.source)?.section || nodeById.get(edge.target)?.section),
           type:edge.kind === 'year' ? 'dashed' : ['author','organization'].includes(edge.kind) ? 'dotted' : 'solid',
           opacity:edge.kind === 'year' ? 0.35 : 0.55, width:1},
@@ -398,6 +423,7 @@ function renderGraph() {
   $('graph-expand').disabled = empty;
   $('graph-reset').disabled = empty;
   $('graph-relations').disabled = empty;
+  $('graph-relations-expanded').disabled = empty;
   syncRotationControls();
   if (empty) {
     disposeChart('constellation');
@@ -455,7 +481,12 @@ function renderAnnual() {
   counts.replaceChildren();
   for (const section of payload.sections) {
     if (section.current_count) {
-      counts.append(link(`${section.label} ${section.current_count} 条 · ${percentage(section.current_count)}%`, resumeHref(section.key, payload.year)));
+      const entry = link(`${section.label} ${section.current_count} 条 · ${percentage(section.current_count)}%`, resumeHref(section.key, payload.year));
+      const swatch = element('span', '', 'graph-legend-swatch');
+      swatch.style.setProperty('--legend-color', sectionColor(section.key));
+      swatch.setAttribute('aria-hidden', 'true');
+      entry.prepend(swatch);
+      counts.append(entry);
     }
   }
   const empty = payload.current_total === 0;
@@ -475,23 +506,32 @@ function renderAnnual() {
       name:section.label, type:'bar', stack:'current-share', barWidth:38,
       itemStyle:{color:sectionColor(section.key)},
       data:[{value:section.current_count, section:section.key}],
-      label:{show:section.current_count / payload.current_total >= 0.12, position:'inside', color:'#ffffff', fontSize:12,
+      label:{show:section.current_count / payload.current_total >= 0.12, position:'inside', color:sections.get(section.key).labelColor, fontSize:12,
         formatter:() => `${section.current_count} · ${percentage(section.current_count)}%`},
-      emphasis:{itemStyle:{borderColor:'#111827', borderWidth:1}},
+      emphasis:{itemStyle:{borderColor:chartTheme.ink, borderWidth:1}},
     })),
   }, {notMerge:true});
   const undated = $('undated-summary');
   undated.replaceChildren(document.createTextNode(`年份未填：${payload.undated_total} 条，不计入年度统计。`),
     link('查看并补录业务日期', resumeHref('overview', 'undated')));
 
-  chartFor('annual-counts').setOption({
+  const historyEmpty = !payload.sections.some(section => section.counts.some(count => count > 0));
+  $('history-empty').hidden = !historyEmpty;
+  $('annual-counts').hidden = historyEmpty;
+  $('history-note').hidden = historyEmpty;
+  if (historyEmpty) disposeChart('annual-counts');
+  else chartFor('annual-counts').setOption({
     ...commonOptions(),
-    legend:{data:payload.years.map(String), selectedMode:false, top:0},
+    legend:{data:payload.years.map(String), selectedMode:false, top:0,
+      textStyle:{color:chartTheme.ink, fontFamily:chartTheme.fontFamily}},
     grid:{top:48, right:24, bottom:70, left:52},
-    xAxis:{type:'category', data:payload.sections.map(section => section.label), axisLabel:{interval:0, fontSize:11},
-      axisLine:{lineStyle:{color:'#e5e7eb'}}, axisTick:{show:false}},
-    yAxis:{type:'value', name:'数量', min:0, minInterval:1, axisLabel:{formatter:value => String(value)},
-      splitLine:{lineStyle:{color:'#eef2f6'}}},
+    xAxis:{type:'category', data:payload.sections.map(section => section.label),
+      axisLabel:{interval:0, fontSize:11, color:chartTheme.muted},
+      axisLine:{lineStyle:{color:chartTheme.line}}, axisTick:{show:false}},
+    yAxis:{type:'value', name:'数量', min:0, minInterval:1,
+      nameTextStyle:{color:chartTheme.muted, fontFamily:chartTheme.fontFamily},
+      axisLabel:{formatter:value => String(value), color:chartTheme.muted},
+      splitLine:{lineStyle:{color:chartTheme.line}}},
     tooltip:tooltipOptions(params => {
       if (!params.length) return '';
       const section = payload.sections[params[0].dataIndex];
@@ -536,6 +576,7 @@ function renderRecent() {
   const list = $('recent-events');
   list.replaceChildren();
   $('recent-empty').hidden = payload.recent.length !== 0;
+  list.hidden = payload.recent.length === 0;
   for (const event of payload.recent) {
     const item = element('li');
     const heading = element('div');
@@ -655,13 +696,25 @@ async function vendorReady() {
   if (!window.echarts) throw new Error('图表组件加载失败');
 }
 function setLoading() {
+  chartTheme = readChartTheme();
+  payload = null;
+  if (dialog.open) dialog.close();
+  disposeCharts();
+  clearInterval(recentTimer);
+  recentTimer = null;
   content.hidden = false;
   content.setAttribute('aria-busy', 'true');
   errorBox.hidden = true;
   retry.disabled = true;
-  for (const id of ['constellation','annual-share','annual-counts']) $(id).classList.add('skeleton');
-  $('recent-events').replaceChildren(element('li', '正在加载修改记录…', 'muted'));
-  $('recent-empty').hidden = true;
+  for (const id of LOADING_IDS) $(id).hidden = false;
+  for (const id of ['constellation', 'annual-share', 'annual-counts', 'recent-events',
+    'graph-empty', 'recent-empty', 'annual-empty', 'history-empty', 'history-note']) $(id).hidden = true;
+  for (const id of ['graph-reset', 'graph-expand', 'graph-relations', 'graph-relations-expanded']) $(id).disabled = true;
+  syncRotationControls();
+  for (const id of ['graph-legend', 'current-counts', 'recent-events', 'undated-summary',
+    'dashboard-data-table', 'graph-record-links']) $(id).replaceChildren();
+  $('current-total').textContent = '—';
+  $('current-year-title').textContent = '当年记录';
 }
 async function loadDashboard() {
   if (loading) return;
@@ -677,14 +730,17 @@ async function loadDashboard() {
     await vendorReady();
     if (disposed) return;
     payload = data;
-    sections = new Map(payload.sections.map((section, index) => [section.key, {...section, color:SECTION_COLORS[index]}]));
+    sections = new Map(payload.sections.map((section, index) => {
+      const color = SECTION_COLORS[index];
+      return [section.key, {...section, color, labelColor:textOnFill(color)}];
+    }));
     nodeById = new Map(payload.graph.nodes.map(node => [node.id, node]));
     edgesByNode = new Map(payload.graph.nodes.map(node => [node.id, []]));
     for (const edge of payload.graph.edges) {
       edgesByNode.get(edge.source)?.push(edge);
       edgesByNode.get(edge.target)?.push(edge);
     }
-    for (const id of ['constellation','annual-share','annual-counts']) $(id).classList.remove('skeleton');
+    for (const id of LOADING_IDS) $(id).hidden = true;
     renderGraph();
     renderLegend();
     renderRecent();
@@ -694,9 +750,14 @@ async function loadDashboard() {
     if (disposed || error.name === 'AbortError') return;
     disposeCharts();
     clearInterval(recentTimer);
+    recentTimer = null;
+    payload = null;
+    if (dialog.open) dialog.close();
+    syncRotationControls();
     content.hidden = true;
     errorBox.hidden = false;
   } finally {
+    for (const id of LOADING_IDS) $(id).hidden = true;
     content.setAttribute('aria-busy', 'false');
     retry.disabled = false;
     loading = false;

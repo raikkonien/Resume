@@ -113,6 +113,7 @@ accountForm.addEventListener("submit", async (event) => {
 
 const archiveList = archive.querySelector(".archive-list");
 const archiveStatus = archive.querySelector(".archive-status");
+const archiveLoading = archive.querySelector(".archive-loading");
 const archiveRetry = archive.querySelector(".btn-retry-archive");
 const archiveCount = archive.querySelector(".archive-selection-count");
 const restoreSelected = archive.querySelector(".btn-restore-selected");
@@ -170,6 +171,19 @@ function renderArchive() {
   archiveList.replaceChildren();
   archiveSummary();
   if (!archivedRecords.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    const title = document.createElement("h3");
+    title.className = "empty-state-title";
+    title.textContent = "还没有归档记录";
+    const copy = document.createElement("p");
+    copy.className = "empty-state-copy";
+    copy.textContent = "需要整理履历时，可在简历页将记录移入归档。";
+    const link = document.createElement("a");
+    link.href = "/resume";
+    link.textContent = "前往简历页";
+    empty.append(title, copy, link);
+    archiveList.append(empty);
     syncArchiveControls();
     return;
   }
@@ -235,6 +249,7 @@ function renderArchive() {
 async function loadArchive() {
   if (loadingArchive || archivePending) return;
   loadingArchive = true;
+  archiveLoading.hidden = archiveList.childElementCount > 0;
   syncArchiveControls();
   status(archiveStatus, "正在加载归档记录…");
   try {
@@ -248,9 +263,11 @@ async function loadArchive() {
     }
     renderArchive();
   } catch (error) {
-    status(archiveStatus, `归档加载失败：${error.message}。可重新加载，当前列表和选择未清除。`, true);
+    const retained = archiveList.childElementCount > 0 ? "当前列表和选择已保留。" : "";
+    status(archiveStatus, `归档加载失败：${error.message}。${retained}可重新加载。`, true);
   } finally {
     loadingArchive = false;
+    archiveLoading.hidden = true;
     syncArchiveControls();
   }
 }

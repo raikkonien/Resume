@@ -1,19 +1,21 @@
 {% extends "base.html" %}
 {% block title %}登录 · 个人简历{% endblock %}
 {% block content %}
-<section class="login-panel">
-  <p class="eyebrow">PRIVATE RESUME</p>
-  <h1>你的经历，<br>妥善收录。</h1>
-  <p class="muted">每个账号独立管理资料与模型配置。</p>
-  <form method="post" action="/login">
+<section class="login-panel" aria-labelledby="login-title" aria-describedby="login-description">
+  <header class="login-heading">
+    <p class="eyebrow">私人资料库</p>
+    <h1 id="login-title">登录个人工作台</h1>
+    <p id="login-description" class="muted">维护履历、查看简历，管理本人文档识别配置。</p>
+  </header>
+  <form method="post" action="/login" aria-label="账号登录">
     <input type="hidden" name="next" value="{{ next }}">
     <label for="username">用户名</label>
     <input id="username" type="text" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" value="{{ username or '' }}" required autofocus>
     <label for="password">密码</label>
     <input id="password" type="password" name="password" autocomplete="current-password" required>
     {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
-    <button class="primary" type="submit">进入资料库 <span aria-hidden="true">→</span></button>
+    <button class="primary" type="submit">登录 <span aria-hidden="true">→</span></button>
   </form>
-  <p class="login-note">私有简历资料库 · 账号由部署端创建</p>
+  <p class="login-note">使用已有账号登录 · 各账号资料与模型配置独立保存</p>
 </section>
 {% endblock %}

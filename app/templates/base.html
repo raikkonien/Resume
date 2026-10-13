@@ -5,6 +5,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}个人简历{% endblock %}</title>
+  <meta name="description" content="维护个人履历、查看年度记录、导出简历并管理文档识别配置的私人工作台。">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', path='favicon.svg') }}">
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}?v={{ asset_versions['style.css'] }}">
   <script type="importmap">{{ {"imports": {"resume-table": url_for('static', path='table.js') | string ~ '?v=' ~ asset_versions.get('table.js', ''), "resume-editor": url_for('static', path='admin.js') | string ~ '?v=' ~ asset_versions['admin.js']}} | tojson }}</script>
   {% block scripts %}{% endblock %}

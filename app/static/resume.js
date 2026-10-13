@@ -94,6 +94,16 @@ export async function flushLayouts() {
 }
 function dirtyLayouts() { return [...queues.values()].some(q => q.pending || q.running || q.failed); }
 
+function revealActiveTab() {
+  const tab = document.querySelector('.resume-tab.active');
+  const strip = tab.parentElement;
+  const bounds = strip.getBoundingClientRect();
+  const item = tab.getBoundingClientRect();
+  if (item.left < bounds.left) strip.scrollLeft += item.left - bounds.left;
+  else if (item.right > bounds.right) strip.scrollLeft += item.right - bounds.right;
+}
+window.addEventListener('resize',revealActiveTab);
+
 function renderView(updateUrl = true) {
   if (!searchTimer && !composing) input.value = state.query;
   document.getElementById('resume-search-clear').hidden = !state.query;
@@ -111,6 +121,8 @@ function renderView(updateUrl = true) {
     tab.setAttribute('aria-selected',String(active));
     tab.tabIndex = active ? 0 : -1;
   }
+  revealActiveTab();
+  document.getElementById('resume-panels').setAttribute('aria-labelledby',`tab-${state.tab}`);
   document.getElementById('export-resume').hidden = state.tab !== 'overview';
   document.getElementById('resume-empty').hidden = total!==0 || state.tab!=='overview';
   let message = state.query ? '搜索全部内容，栏目筛选暂未应用' : '';
@@ -200,7 +212,11 @@ function searchChanged() {
 input.addEventListener('compositionstart',()=>{composing=true;clearTimeout(searchTimer);searchTimer=null;});
 input.addEventListener('compositionend',()=>{composing=false;searchChanged();});
 input.addEventListener('input',searchChanged);
-document.getElementById('resume-search-clear').addEventListener('click',()=>{ clearTimeout(searchTimer);searchTimer=null;state.query='';state.tab='overview';state.year=null;state.entry=null;renderView();input.focus(); });
+function clearSearch() {
+  clearTimeout(searchTimer);searchTimer=null;state.query='';state.tab='overview';state.year=null;state.entry=null;renderView();input.focus();
+}
+document.getElementById('resume-search-clear').addEventListener('click',clearSearch);
+document.getElementById('resume-empty-clear').addEventListener('click',clearSearch);
 document.querySelector('#temporary-filter button').addEventListener('click',()=>{state.year=null;state.entry=null;renderView();});
 window.addEventListener('popstate',async()=>{ if (!(await editor.close())) {writeLocation();return;}clearTimeout(searchTimer);searchTimer=null;state=parseLocation();renderView(false); });
 
@@ -258,11 +274,12 @@ renderView();
 
 function initPdfExport() {
   const button=document.getElementById('export-resume'),dialog=document.getElementById('export-dialog');
+  const buttonLabel=button.querySelector('.export-label');
   const title=document.getElementById('export-title'),message=document.getElementById('export-message'),spinner=dialog.querySelector('.export-spinner'),dismiss=document.getElementById('export-dismiss'),status=document.getElementById('export-status');
   dismiss.addEventListener('click',()=>dialog.close());
   button.addEventListener('click',async()=>{
     if(button.disabled)return;
-    button.disabled=true;button.setAttribute('aria-busy','true');button.textContent='正在生成…';
+    button.disabled=true;button.setAttribute('aria-busy','true');buttonLabel.textContent='正在生成…';
     title.textContent='正在生成简历 PDF';message.textContent='正在整理资料与分页，完成后将自动下载。关闭此窗口后仍会继续生成。';dismiss.textContent='后台继续生成';spinner.hidden=false;status.hidden=true;status.classList.remove('error');dialog.showModal();
     try {
       const response=await request(button.dataset.url,{method:'POST'});
@@ -274,24 +291,25 @@ function initPdfExport() {
       document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
       if(dialog.open)dialog.close();status.textContent='简历 PDF 已生成并开始下载';
     } catch(error) {title.textContent='导出未完成';message.textContent=error.message;spinner.hidden=true;dismiss.textContent='关闭';status.textContent=error.message;status.classList.add('error');}
-    finally {status.hidden=false;button.disabled=false;button.removeAttribute('aria-busy');button.textContent='导出简历';}
+    finally {status.hidden=false;button.disabled=false;button.removeAttribute('aria-busy');buttonLabel.textContent='导出简历';}
   });
 }
 function initPaperDetails() {
   const dialog=document.getElementById('paper-dialog'),close=document.getElementById('paper-dialog-close'),content=document.getElementById('paper-dialog-content'),status=document.getElementById('paper-dialog-status'),retry=document.getElementById('paper-dialog-retry'),body=dialog.querySelector('.paper-dialog-body');
+  const skeleton=document.getElementById('paper-dialog-loading');
   let controller=null,opener=null,url='';
   async function load() {
-    controller?.abort();const active=new AbortController();controller=active;content.replaceChildren();content.setAttribute('aria-busy','true');status.classList.remove('error');status.textContent='正在加载文章详情…';retry.hidden=true;body.scrollTop=0;
+    controller?.abort();const active=new AbortController();controller=active;content.replaceChildren();content.setAttribute('aria-busy','true');skeleton.hidden=false;status.classList.remove('error');status.textContent='正在加载文章详情…';retry.hidden=true;body.scrollTop=0;
     try {
       const response=await request(url,{cache:'no-store',signal:active.signal});
       if(!response.headers.get('Content-Type')?.startsWith('text/html'))throw new Error('文章详情加载失败，请重试');
       const html=await response.text();if(controller!==active || !dialog.open)return;content.innerHTML=html;status.textContent='';
     } catch(error) {if(controller!==active || !dialog.open || error.name==='AbortError')return;status.textContent=error.message;status.classList.add('error');retry.hidden=false;}
-    finally {if(controller===active){controller=null;content.removeAttribute('aria-busy');}}
+    finally {if(controller===active){controller=null;content.removeAttribute('aria-busy');skeleton.hidden=true;}}
   }
   panels.get('papers').addEventListener('click',event=>{const button=event.target.closest('.paper-title');if(!button)return;opener=button;url=button.dataset.url;if(!dialog.open)dialog.showModal();close.focus({preventScroll:true});load();});
   close.addEventListener('click',()=>dialog.close());retry.addEventListener('click',load);
-  dialog.addEventListener('close',()=>{controller?.abort();controller=null;content.replaceChildren();content.removeAttribute('aria-busy');if(opener?.isConnected)opener.focus({preventScroll:true});opener=null;});
+  dialog.addEventListener('close',()=>{controller?.abort();controller=null;content.replaceChildren();content.removeAttribute('aria-busy');skeleton.hidden=true;if(opener?.isConnected)opener.focus({preventScroll:true});opener=null;});
 }
 initPdfExport();
 initPaperDetails();
