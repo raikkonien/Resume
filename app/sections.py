@@ -33,8 +33,9 @@ class Section:
     year_fields: tuple[str, ...] = ()
 
 
-IMG = ".jpg,.jpeg,.png"
+IMG = ".jpg,.jpeg,.png,.zip"
 DOC = ".pdf,.jpg,.jpeg,.png"
+ATTACHMENT = DOC + ",.zip"
 
 BASIC = Section("basic", "个人基本信息", (
     Field("name", "姓名", "text"),
@@ -67,6 +68,7 @@ ENTRY_SECTIONS = (
         Field("end_date", "结束时间", "date"),
         Field("employer", "工作单位", "text"),
         Field("title", "取得职称", "text"),
+        Field("attachment", "附件", "file", accept=ATTACHMENT),
     ), title_field="employer", year_fields=("begin_date",)),
     Section("contracts", "合同", (
         Field("identifier", "合同标识", "select", ("订立", "续订")),
@@ -74,7 +76,7 @@ ENTRY_SECTIONS = (
         Field("begin_date", "合同起始日期", "date", date_format="YYYY.MM.DD"),
         Field("end_date", "合同终止日期", "date", date_format="YYYY.MM.DD"),
         Field("terms", "合同约定事项", "textarea"),
-        Field("contract_pdf", "合同 PDF", "file", accept=".pdf"),
+        Field("contract_pdf", "合同 PDF", "file", accept=".pdf,.zip"),
     ), title_field="type", year_fields=("begin_date",)),
     Section("annual_reviews", "年度考核", (
         Field("category", "考核类别", "select", ("年度考核",)),
@@ -83,6 +85,7 @@ ENTRY_SECTIONS = (
         Field("ungraded_reason", "参加考核不定等次原因", "text"),
         Field("absent_reason", "未参加考核原因", "text"),
         Field("advanced_type", "先进类型", "select", ("校级先进", "院级先进")),
+        Field("attachment", "附件", "file", accept=ATTACHMENT),
     ), title_field="year", year_fields=("year",)),
     Section("appointments", "党政职务", (
         Field("department", "任职部门", "text"),
@@ -91,12 +94,14 @@ ENTRY_SECTIONS = (
         Field("level", "职务级别", "select", ("正科级", "副科级", "正处级", "副处级")),
         Field("begin_date", "任现职时间", "date", date_format="YYYY.MM.DD"),
         Field("end_date", "免职日期", "date", date_format="YYYY.MM.DD"),
+        Field("attachment", "附件", "file", accept=ATTACHMENT),
     ), title_field="name", year_fields=("begin_date",)),
     Section("positions", "岗位设置", (
         Field("level", "岗位级别", "text"),
         Field("begin_date", "起聘时间", "date", date_format="YYYY.MM.DD"),
         Field("employer", "聘任单位", "select", ("浙江大学",)),
         Field("change_type", "变动类型", "select", ("聘岗", "职称")),
+        Field("attachment", "附件", "file", accept=ATTACHMENT),
     ), title_field="level", year_fields=("begin_date",)),
     Section("education", "学习", (
         Field("begin_date", "开始时间", "date"),
@@ -108,8 +113,8 @@ ENTRY_SECTIONS = (
         Field("award_year", "授予年份", "year"),
         Field("supervisor", "导师", "text"),
         Field("full_time", "是否全日制", "checkbox"),
-        Field("degree_cert", "学位证书", "file", accept=DOC),
-        Field("diploma_cert", "学历证书", "file", accept=DOC),
+        Field("degree_cert", "学位证书", "file", accept=ATTACHMENT),
+        Field("diploma_cert", "学历证书", "file", accept=ATTACHMENT),
     ), title_field="school", year_fields=("award_year",)),
     Section("papers", "文章", (
         Field("year", "年份", "year"),
@@ -126,7 +131,7 @@ ENTRY_SECTIONS = (
         Field("cas_quartile", "中科院分区", "select", ("一区", "二区", "三区", "四区")),
         Field("jcr_quartile", "JCR 分区", "select", ("Q1", "Q2", "Q3", "Q4")),
         Field("authors", "作者", "authors"),
-        Field("article_pdf", "文章附件", "file", accept=DOC),
+        Field("article_pdf", "文章附件", "file", accept=ATTACHMENT),
     ), title_field="title", year_fields=("year",)),
     Section("patents", "专利", (
         Field("region", "专利地", "select", ("国内", "国际")),
@@ -139,7 +144,7 @@ ENTRY_SECTIONS = (
         Field("grant_date", "授权公告日期", "date"),
         Field("apply_date", "专利申请日期", "date"),
         Field("rank", "本人排名", "rank"),
-        Field("certificate", "专利证书", "file", accept=DOC),
+        Field("certificate", "专利证书", "file", accept=ATTACHMENT),
     ), title_field="name", year_fields=("grant_date",)),
     Section("software", "软件著作", (
         Field("year", "年份", "year"),
@@ -149,7 +154,7 @@ ENTRY_SECTIONS = (
         Field("reg_date", "登记日期", "date"),
         Field("cert_number", "证书号", "text"),
         Field("rank", "本人排名", "rank"),
-        Field("certificate", "软件著作证书", "file", accept=DOC),
+        Field("certificate", "软件著作证书", "file", accept=ATTACHMENT),
     ), title_field="name", year_fields=("year",)),
     Section("projects", "课题", (
         Field("begin_date", "开始时间", "date"),
@@ -163,9 +168,9 @@ ENTRY_SECTIONS = (
         Field("funder", "资助机构", "text"),
         Field("amount", "资助金额（万元）", "number"),
         Field("close_date", "结题日期", "date"),
-        Field("contract", "合同", "file", accept=DOC),
-        Field("fund_proof", "经费到账证明", "file", accept=DOC),
-        Field("close_proof", "结题证明", "file", accept=DOC),
+        Field("contract", "合同", "file", accept=ATTACHMENT),
+        Field("fund_proof", "经费到账证明", "file", accept=ATTACHMENT),
+        Field("close_proof", "结题证明", "file", accept=ATTACHMENT),
     ), title_field="name", year_fields=("begin_date",)),
     Section("transfers", "成果转化", (
         Field("name", "成果名称", "text"),
@@ -174,8 +179,8 @@ ENTRY_SECTIONS = (
         Field("amount", "成交金额（万元）", "number"),
         Field("company", "受让、许可或合作公司", "text"),
         Field("sign_date", "合同签订日期", "date"),
-        Field("contract", "合同", "file", accept=DOC),
-        Field("payment_proof", "到账证明", "file", accept=DOC),
+        Field("contract", "合同", "file", accept=ATTACHMENT),
+        Field("payment_proof", "到账证明", "file", accept=ATTACHMENT),
     ), title_field="name", year_fields=("sign_date",)),
     Section("books", "论著", (
         Field("title", "专著题目", "text"),
@@ -188,9 +193,9 @@ ENTRY_SECTIONS = (
         Field("publisher", "出版社", "text"),
         Field("pub_date", "出版日期", "date"),
         Field("authors", "作者", "text"),
-        Field("first_page", "书首页", "file", accept=DOC),
-        Field("title_page", "书扉页", "file", accept=DOC),
-        Field("publishing_contract", "出版合同", "file", accept=DOC),
+        Field("first_page", "书首页", "file", accept=ATTACHMENT),
+        Field("title_page", "书扉页", "file", accept=ATTACHMENT),
+        Field("publishing_contract", "出版合同", "file", accept=ATTACHMENT),
     ), title_field="title", year_fields=("pub_date",)),
     Section("memberships", "社会兼职", (
         Field("society", "学协会名称", "text"),
@@ -199,7 +204,7 @@ ENTRY_SECTIONS = (
         Field("role", "任职岗位", "select", ("主委", "常务副主委", "副主委", "常委", "委员", "理事", "常务理事")),
         Field("begin_month", "聘期开始", "month"),
         Field("end_month", "聘期结束", "month"),
-        Field("certificate", "证书", "file", accept=DOC),
+        Field("certificate", "证书", "file", accept=ATTACHMENT),
     ), title_field="society", year_fields=("begin_month",)),
     Section("standards", "团体/行业标准", (
         Field("name", "标准名称", "text"),
@@ -207,14 +212,14 @@ ENTRY_SECTIONS = (
         Field("number", "编号", "text"),
         Field("publish_date", "发布日期", "date"),
         Field("rank", "本人排名", "rank"),
-        Field("document", "标准文件", "file", accept=DOC),
+        Field("document", "标准文件", "file", accept=ATTACHMENT),
     ), title_field="name", year_fields=("publish_date",)),
     Section("trainings", "培训学习", (
         Field("begin_date", "开始时间", "date"),
         Field("end_date", "结束时间", "date"),
         Field("organizer", "培训单位", "text"),
         Field("content", "培训内容", "textarea"),
-        Field("certificate", "证书", "file", accept=DOC),
+        Field("certificate", "证书", "file", accept=ATTACHMENT),
     ), title_field="content", year_fields=("begin_date",)),
     Section("conferences", "学术会议", (
         Field("type", "学术会议类型", "select", ("参加国内学术会议", "参加国际学术会议")),
@@ -224,15 +229,15 @@ ENTRY_SECTIONS = (
         Field("country", "会议国家", "text"),
         Field("city", "会议城市", "text"),
         Field("organizer", "主办单位", "text"),
-        Field("submission", "会议投稿", "file", accept=DOC),
-        Field("certificate", "会议相关证书", "file", accept=DOC),
+        Field("submission", "会议投稿", "file", accept=ATTACHMENT),
+        Field("certificate", "会议相关证书", "file", accept=ATTACHMENT),
     ), title_field="name", year_fields=("begin_date",)),
     Section("licenses", "执业资格", (
         Field("name", "职业资格名称", "text"),
         Field("begin_date", "开始日期", "date"),
         Field("validity", "有效期", "text"),
         Field("issuer", "颁发单位", "text"),
-        Field("certificate", "证书", "file", accept=DOC),
+        Field("certificate", "证书", "file", accept=ATTACHMENT),
     ), title_field="name", year_fields=("begin_date",)),
 )
 SECTIONS = {section.key: section for section in (BASIC, *ENTRY_SECTIONS)}

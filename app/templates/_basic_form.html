@@ -1,10 +1,10 @@
-{% from "macros.html" import render_field %}
-<form id="basic-form" class="entry" autocomplete="off" data-1p-ignore="true" data-url="/api/basic" data-method="PUT" data-max-upload-mb="{{ max_upload_mb }}" enctype="multipart/form-data" aria-label="个人基本信息编辑">
+{% from "macros.html" import render_field, render_attachment %}
+<form id="basic-form" class="entry" autocomplete="off" data-1p-ignore="true" data-url="/api/basic" data-method="PUT" data-ocr-url="/api/basic/ocr" data-max-upload-mb="{{ max_upload_mb }}" enctype="multipart/form-data" aria-label="个人基本信息编辑">
   <div class="entry-head"><span class="entry-label">编辑个人基本信息</span><span class="status" role="status" aria-live="polite">尚未保存</span></div>
   <div class="fields">{% for f in basic_section.fields %}{% if f.type != 'file' %}{{ render_field(f, basic, 'basic', basic.id) }}{% endif %}{% endfor %}</div>
   <div class="photo-editor field-wide">
-    {% if basic.photo %}<img src="/files/basic/{{ basic.id }}/photo" class="photo-preview" alt="个人照片">{% endif %}
-    <div>{{ render_field(basic_section.fields[-1], basic, 'basic', basic.id) }}<p class="muted">照片替换或“保存时删除”仅在保存后生效；单个文件不超过 {{ max_upload_mb }}MB。</p></div>
+    {% if basic.photo and not basic.photo.lower().endswith('.zip') %}<img src="/files/basic/{{ basic.id }}/photo" class="photo-preview" alt="个人照片">{% endif %}
+    <div>{{ render_attachment(basic_section.fields[-1], basic, 'basic', basic.id, max_upload_mb, upload_preferences) }}<p class="muted">开启 AI 识别后，图像内容将发送至<a href="/settings#model" data-leave>本人配置的识别模型</a>补充空白字段，请核对。照片替换或“保存时删除”仅在保存后生效。</p></div>
   </div>
   <div class="form-footer entry-footer"><span class="muted">取消不会更改资料或照片。</span><div class="entry-actions"><button type="button" class="btn-cancel">取消</button><button type="submit" class="primary">保存基本信息</button></div></div>
 </form>

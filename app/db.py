@@ -408,6 +408,13 @@ def init_db() -> None:
                     "section_key TEXT NOT NULL, layout_json TEXT NOT NULL, PRIMARY KEY(user_id, section_key))"
                 )
                 db.execute(
+                    "CREATE TABLE IF NOT EXISTS upload_preferences ("
+                    "user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, "
+                    "section_key TEXT NOT NULL, field_key TEXT NOT NULL, "
+                    "enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)), "
+                    "PRIMARY KEY(user_id, section_key, field_key))"
+                )
+                db.execute(
                     "INSERT INTO app_metadata (key, value) VALUES ('workspace_schema_version', '1') "
                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
                 )
@@ -505,6 +512,42 @@ def save_ocr_settings(db: sqlite3.Connection, user_id: int, endpoint: str, model
             (endpoint, model, api_key, user_id),
         )
 
+
+
+def _upload_fields(section: Section) -> set[str]:
+    schema = SECTIONS.get(section.key)
+    if schema is None:
+        raise ValueError("未知栏目")
+    return {field.key for field in schema.fields if field.type == "file"}
+
+
+def get_upload_preferences(db: sqlite3.Connection, section: Section, user_id: int) -> dict[str, bool]:
+    _require_user(db, user_id)
+    preferences = dict.fromkeys(_upload_fields(section), True)
+    for row in db.execute(
+        "SELECT field_key, enabled FROM upload_preferences WHERE user_id = ? AND section_key = ?",
+        (user_id, section.key),
+    ):
+        if row["field_key"] in preferences:
+            preferences[row["field_key"]] = bool(row["enabled"])
+    return preferences
+
+
+def save_upload_preference(db: sqlite3.Connection, section: Section, user_id: int,
+                           field_key: str, enabled: bool) -> dict[str, bool]:
+    if not isinstance(field_key, str) or field_key not in _upload_fields(section):
+        raise ValueError("附件字段无效")
+    if type(enabled) is not bool:
+        raise ValueError("enabled 必须为布尔值")
+    with write_lock, db:
+        db.execute("BEGIN IMMEDIATE")
+        _require_user(db, user_id)
+        db.execute(
+            "INSERT INTO upload_preferences (user_id, section_key, field_key, enabled) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id, section_key, field_key) DO UPDATE SET enabled = excluded.enabled",
+            (user_id, section.key, field_key, int(enabled)),
+        )
+    return {"enabled": enabled}
 
 def get_basic(db: sqlite3.Connection, user_id: int) -> dict[str, Any]:
     _require_user(db, user_id)

@@ -74,20 +74,21 @@ class OcrStreamEndpointTests(unittest.TestCase):
         self.assertEqual(events[0]["type"], "error")
         self.assertIsInstance(events[0]["error"], str)
 
-    def test_attachment_only_fields_are_rejected_before_any_model_call(self):
-        for section, field in (("projects", "fund_proof"), ("projects", "close_proof"),
-                               ("books", "publishing_contract")):
-            with self.subTest(section=section, field=field):
-                with patch("app.ocr._call_model") as mocked_call:
-                    response = self.client.post(
-                        f"/api/entries/{section}/ocr",
-                        files={"file": ("proof.pdf", make_pdf_bytes(1), "application/pdf")},
-                        data={"field": field},
-                    )
-                self.assertEqual(response.status_code, 400)
-                self.assertIn("error", response.json())
-                self.assertNotEqual(response.headers["content-type"], "application/x-ndjson")
-                mocked_call.assert_not_called()
+    def test_every_attachment_source_is_recognizable_by_default(self):
+        for section, schema in SECTIONS.items():
+            if schema.single:
+                continue
+            for field in (field for field in schema.fields if field.type == "file"):
+                with self.subTest(section=section, field=field.key):
+                    with patch("app.ocr._call_model", return_value=stub_model_response()) as model:
+                        response = self.client.post(
+                            f"/api/entries/{section}/ocr",
+                            files={"file": ("document.pdf", make_pdf_bytes(1), "application/pdf")},
+                            data={"field": field.key},
+                        )
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(self.events(response)[-1]["type"], "result")
+                    model.assert_called_once()
 
     def test_projects_contract_and_other_sections_remain_recognizable(self):
         with patch("app.ocr._call_model", side_effect=lambda *a, **k: stub_model_response()):
@@ -126,6 +127,46 @@ class OcrStreamEndpointTests(unittest.TestCase):
 
 
 class StreamRecognitionCancellationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_opt_out_closes_upload_without_reading_or_starting_worker(self):
+        from contextlib import closing
+
+        isolated_store(self)
+        with closing(db.connect()) as conn:
+            user = db.get_user_by_username(conn, "zhangrui")
+            db.save_upload_preference(conn, SECTIONS["projects"], user["id"], "fund_proof", False)
+
+        class UnreadableUpload(io.BytesIO):
+            def read(self, *args, **kwargs):
+                raise AssertionError("disabled recognition must not read the upload")
+
+        stream = UnreadableUpload(b"unreadable document")
+        upload = UploadFile(filename="proof.pdf", file=stream)
+
+        class FakeFormCM:
+            exit_count = 0
+
+            async def __aenter__(self):
+                return {"file": upload, "field": "fund_proof"}
+
+            async def __aexit__(self, *args):
+                self.exit_count += 1
+                await upload.close()
+
+        form_cm = FakeFormCM()
+
+        class FakeRequest:
+            def form(self, **kwargs):
+                return form_cm
+
+        with patch.object(admin, "require_session_user", return_value=user), \
+                patch.object(admin, "active_session_user", return_value=user), \
+                patch.object(admin, "recognize") as recognize:
+            response = await admin.recognize_upload(FakeRequest(), SECTIONS["projects"])
+            self.assertEqual(response.status_code, 400)
+            recognize.assert_not_called()
+        self.assertEqual(form_cm.exit_count, 1)
+        self.assertTrue(stream.closed)
+
     async def wait_until(self, predicate, timeout=2.0, interval=0.005):
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout

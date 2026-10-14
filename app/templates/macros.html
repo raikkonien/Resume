@@ -1,7 +1,7 @@
 {% macro render_upload(control_id, name, accept) %}
 <div class="upload-control">
   <label class="upload-dropzone" for="{{ control_id }}">
-    <input class="upload-input" id="{{ control_id }}" type="file" data-1p-ignore="true"{% if name %} name="{{ name }}"{% endif %} accept="{{ accept }}" aria-describedby="{{ control_id }}-selected {{ control_id }}-upload-status">
+    <input class="upload-input" id="{{ control_id }}" type="file" name="{{ name }}" data-1p-ignore="true" accept="{{ accept }}" aria-describedby="{{ control_id }}-selected {{ control_id }}-upload-status">
     <span class="upload-icon" aria-hidden="true">
       {# Tabler Icons: upload (MIT); license: app/static/vendor/licenses/LICENSE-tabler-icons. #}
       <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -68,15 +68,6 @@
   </select>
   {% elif f.type == 'checkbox' %}
   <input id="{{ control_id }}" type="checkbox" name="{{ f.key }}" value="1" data-1p-ignore="true"{% if value %} checked{% endif %}{% if entry_id is not none %} data-user-edited="true"{% endif %}>
-  {% elif f.type == 'file' %}
-  {% if value %}
-  <div class="file-current">
-    <a href="/files/{{ section_key }}/{{ entry_id }}/{{ f.key }}" target="_blank" rel="noopener">{{ row[f.key ~ '_name'] }}</a>
-    <label class="file-remove"><input type="checkbox" name="remove_file" value="{{ f.key }}" data-1p-ignore="true">保存时删除</label>
-  </div>
-  {% endif %}
-  {{ render_upload(control_id, f.key, f.accept) }}
-  <small>支持 {{ f.accept }}</small>
   {% elif f.type == 'date' and f.date_format == 'YYYY.MM.DD' %}
   <div class="dotted-date">
     <input id="{{ control_id }}" class="dotted-date-display" type="text" value="{{ (value or '') | replace('-', '.') }}" placeholder="YYYY.MM.DD" inputmode="decimal" maxlength="10" autocomplete="off" data-1p-ignore="true" pattern="[0-9]{4}\.[0-9]{2}\.[0-9]{2}" aria-describedby="{{ control_id }}-help">
@@ -101,13 +92,16 @@
 </div>
 {% endmacro %}
 
-{% macro render_attachment(f, row, section_key, entry_id, max_upload_mb) %}
+{% macro render_attachment(f, row, section_key, entry_id, max_upload_mb, upload_preferences) %}
 {% set control_id = section_key ~ '-' ~ entry_id ~ '-' ~ f.key %}
 {% set value = row.get(f.key) %}
-{% set ocr_enabled = (section_key != 'projects' or f.key == 'contract') and (section_key != 'books' or f.key != 'publishing_contract') %}
+{% set ocr_enabled = upload_preferences.get(f.key, true) %}
 {% set saved_pdf = section_key == 'papers' and value and (row.get(f.key ~ '_name') or '').lower().endswith('.pdf') %}
-<div class="field ocr-zone{% if not ocr_enabled %} attachment-only{% endif %}" data-ocr-field="{{ f.key }}"{% if (section_key == 'projects' and f.key == 'contract') or (section_key == 'contracts' and f.key == 'contract_pdf') %} data-ocr-all-pages="true"{% endif %}{% if saved_pdf %} data-saved-ocr-url="/api/entries/papers/{{ entry_id }}/ocr"{% endif %}>
-  <label for="{{ control_id }}">{{ f.label }}</label>
+<div class="field ocr-zone" data-ocr-field="{{ f.key }}"{% if (section_key == 'projects' and f.key == 'contract') or (section_key == 'contracts' and f.key == 'contract_pdf') %} data-ocr-all-pages="true"{% endif %}{% if saved_pdf %} data-saved-ocr-url="/api/entries/papers/{{ entry_id }}/ocr"{% endif %}>
+  <div class="upload-heading">
+    <label for="{{ control_id }}">{{ f.label }}</label>
+    <label class="ocr-preference" for="{{ control_id }}-ocr-enabled"><input id="{{ control_id }}-ocr-enabled" class="ocr-enabled" type="checkbox" data-1p-ignore="true" data-preference-url="/api/upload-preferences/{{ section_key }}/{{ f.key }}" aria-describedby="{{ control_id }}-preference-status"{% if ocr_enabled %} checked{% endif %}>AI 识别</label>
+  </div>
   {{ render_upload(control_id, f.key, f.accept) }}
   {% if value %}
   <div class="file-current">
@@ -117,31 +111,23 @@
   {% endif %}
   {% if saved_pdf %}
   <div class="saved-ocr-actions">
-    <button type="button" class="ocr-saved" aria-describedby="{{ control_id }}-saved-ocr-help">重新识别</button>
+    <button type="button" class="ocr-saved" aria-describedby="{{ control_id }}-saved-ocr-help"{% if not ocr_enabled %} disabled{% endif %}>重新识别</button>
     <small class="saved-ocr-help" id="{{ control_id }}-saved-ocr-help">仅识别当前已保存 PDF 的首页。确认后可替换识别到的字段和作者；未识别内容、手工分区及识别期间的编辑均保留，点击保存记录才会写入。</small>
   </div>
   {% endif %}
-  <small>支持 {{ f.accept }}，单个文件不超过 {{ max_upload_mb }}MB；{% if ocr_enabled %}选择或拖拽后自动识别。{% else %}仅作为附件保存，不进行自动识别。{% endif %}</small>
+  <small>支持 {{ f.accept }}，单个文件不超过 {{ max_upload_mb }}MB；开启 AI 识别后，选择或拖拽图像 / PDF 自动填充。ZIP 仅作为附件保存。识别偏好立即保存，取消记录编辑不会撤销。</small>
+  <div class="ocr-preference-feedback">
+    <p class="ocr-preference-status" id="{{ control_id }}-preference-status" role="status" aria-live="polite"></p>
+    <button type="button" class="ocr-preference-retry" hidden>重试保存偏好</button>
+  </div>
   <div class="ocr-status-row">
     <p class="ocr-status" role="status" aria-live="polite"></p>
-    {% if ocr_enabled %}<button type="button" class="ocr-retry" hidden>重试</button>{% endif %}
+    <button type="button" class="ocr-retry" hidden{% if not ocr_enabled %} disabled{% endif %}>重试</button>
     {% if saved_pdf %}<button type="button" class="ocr-cancel" hidden>停止识别</button>{% endif %}
   </div>
 </div>
 {% endmacro %}
 
-{% macro render_ocr_only(section_key, entry_id, max_upload_mb) %}
-{% set control_id = section_key ~ '-' ~ entry_id ~ '-ocr-only' %}
-<div class="field ocr-zone" data-ocr-field="">
-  <label for="{{ control_id }}">自动识别文件<span class="record-id">不作为附件保存</span></label>
-  {{ render_upload(control_id, '', '.pdf,.jpg,.jpeg,.png') }}
-  <small>支持 .pdf,.jpg,.jpeg,.png；选择或拖拽后自动识别并填充字段，单个文件不超过 {{ max_upload_mb }}MB。</small>
-  <div class="ocr-status-row">
-    <p class="ocr-status" role="status" aria-live="polite"></p>
-    <button type="button" class="ocr-retry" hidden>重试</button>
-  </div>
-</div>
-{% endmacro %}
 
 {% macro render_author_names(authors, profile) -%}
 {% for author in authors or [] -%}

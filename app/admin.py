@@ -14,9 +14,9 @@ from .auth import require_session_user
 from .config import MAX_UPLOAD_MB
 from .db import (
     ArchiveDeletionPending, ArchiveRecordNotFound, _discard_new_row, _recover_archive_deletions,
-    archive_row, connect, delete_archived_rows, get_basic, get_ocr_settings, get_row, get_user,
-    get_table_layout, insert_row, list_rows, parse_archive_records, reorder_rows, restore_rows,
-    save_table_layout, update_row, write_lock,
+    archive_row, connect, delete_archived_rows, get_basic, get_ocr_settings, get_row,
+    get_table_layout, get_upload_preferences, insert_row, list_rows, parse_archive_records,
+    reorder_rows, restore_rows, save_table_layout, save_upload_preference, update_row, write_lock,
 )
 from .files import delete_entry_dir, delete_upload, save_upload, upload_path, validate_upload
 from .management import active_session_user
@@ -41,11 +41,6 @@ def require_row(db, section, id, user_id):
     return row
 
 
-def profile_user(db, user_id):
-    user = get_user(db, user_id)
-    if user is None:
-        raise HTTPException(401)
-    return user
 
 
 def entry_position(rows, id):
@@ -58,9 +53,12 @@ def entry_position(rows, id):
 
 
 def entry_fragment(request, section, row, position, status_code=200):
+    with closing(connect()) as db:
+        preferences = get_upload_preferences(db, section, require_session_user(request)["id"])
     return templates.TemplateResponse(request, "_entry.html", {
         "section": section, "row": row, "position": position,
         "max_upload_mb": MAX_UPLOAD_MB,
+        "upload_preferences": preferences,
     }, status_code=status_code)
 
 
@@ -198,31 +196,42 @@ async def stream_recognition(form_cm, schema, upload, settings, personal_name, p
                 await form_cm.__aexit__(None, None, None)
 
 
+@router.post("/basic/ocr")
+async def recognize_basic(request: Request):
+    return await recognize_upload(request, BASIC)
+
+
 @router.post("/entries/{section}/ocr")
 async def recognize_entry(request: Request, section: str):
-    user = require_session_user(request)
-    schema = entry_section(section)
+    require_session_user(request)
+    return await recognize_upload(request, entry_section(section))
+
+
+async def recognize_upload(request: Request, schema):
+    require_session_user(request)
     form_cm = request.form(max_files=1, max_fields=1)
     form = await form_cm.__aenter__()
     upload = form.get("file")
     source_field = form.get("field", "")
-    error = None
-    if not isinstance(upload, UploadFile) or not upload.filename:
-        error = "请选择 PDF、JPG 或 PNG 文件"
-    elif not isinstance(source_field, str) or (source_field and not any(
-        field.key == source_field and field.type == "file" for field in schema.fields
-    )):
-        error = "附件字段无效"
-    elif ((section == "projects" and source_field != "contract")
-          or (section == "books" and source_field == "publishing_contract")):
-        error = "该附件不支持自动识别，请手动填写"
-    if error is not None:
-        await form_cm.__aexit__(None, None, None)
-        return JSONResponse({"error": error}, status_code=400)
+    file_fields = {field.key for field in schema.fields if field.type == "file"}
+    if not source_field and len(file_fields) == 1:
+        source_field = next(iter(file_fields))
     try:
-        with closing(connect()) as db:
-            settings = get_ocr_settings(db, user["id"])
-            basic = get_basic(db, user["id"])
+        if not isinstance(source_field, str) or source_field not in file_fields:
+            raise ValueError("附件字段无效")
+        with write_lock, closing(connect()) as db:
+            user_id = active_session_user(request, db)["id"]
+            if not get_upload_preferences(db, schema, user_id)[source_field]:
+                raise ValueError("该附件已关闭 AI 识别，仅保存上传文件")
+            if not isinstance(upload, UploadFile) or not upload.filename:
+                raise ValueError("请选择 PDF、JPG 或 PNG 文件")
+            if upload.filename.lower().endswith(".zip"):
+                raise ValueError("ZIP 附件仅保存上传文件，不支持 AI 识别")
+            settings = get_ocr_settings(db, user_id)
+            basic = get_basic(db, user_id)
+    except ValueError as error:
+        await form_cm.__aexit__(None, None, None)
+        return JSONResponse({"error": str(error)}, status_code=400)
     except Exception:
         await form_cm.__aexit__(None, None, None)
         raise
@@ -235,11 +244,14 @@ async def recognize_entry(request: Request, section: str):
     )
 
 
-def open_saved_paper(user_id, id):
-    """Open an owner-scoped PDF under the storage lock; never modify the record."""
+def open_saved_paper(request, id):
+    """Check the current session and opt-out before opening the owner-scoped PDF."""
     with write_lock, closing(connect()) as db:
-        user = profile_user(db, user_id)
+        user = active_session_user(request, db)
+        user_id = user["id"]
         row = require_row(db, SECTIONS["papers"], id, user_id)
+        if not get_upload_preferences(db, SECTIONS["papers"], user_id)["article_pdf"]:
+            raise ValueError("该附件已关闭 AI 识别，仅保存上传文件")
         if not row["article_pdf"]:
             raise ValueError("尚未上传文章 PDF，请先上传并保存")
         path = upload_path(user["username"], row["article_pdf"])
@@ -256,9 +268,9 @@ def open_saved_paper(user_id, id):
 
 @router.post("/entries/papers/{id}/ocr")
 async def recognize_saved_paper(request: Request, id: int):
-    user = require_session_user(request)
+    require_session_user(request)
     try:
-        upload, settings, basic = await run_in_threadpool(open_saved_paper, user["id"], id)
+        upload, settings, basic = await run_in_threadpool(open_saved_paper, request, id)
     except ValueError as error:
         return JSONResponse({"error": str(error)}, status_code=400)
     resources = AsyncExitStack()
@@ -278,8 +290,10 @@ def edit_basic(request: Request):
     user = require_session_user(request)
     with closing(connect()) as db:
         basic = get_basic(db, user["id"])
+        preferences = get_upload_preferences(db, BASIC, user["id"])
     return templates.TemplateResponse(request, "_basic_form.html", {
         "basic": basic, "basic_section": BASIC, "max_upload_mb": MAX_UPLOAD_MB,
+        "upload_preferences": preferences,
     })
 
 
@@ -461,5 +475,32 @@ async def write_layout(request: Request, section: str):
         with write_lock, closing(connect()) as db:
             user_id = active_session_user(request, db)["id"]
             return save_table_layout(db, schema, user_id, body)
+    except ValueError as error:
+        return JSONResponse({"error": str(error)}, status_code=400)
+
+
+@router.get("/upload-preferences/{section}/{field}")
+def read_upload_preference(request: Request, section: str, field: str):
+    require_session_user(request)
+    schema = layout_section(section)
+    with write_lock, closing(connect()) as db:
+        user_id = active_session_user(request, db)["id"]
+        preferences = get_upload_preferences(db, schema, user_id)
+        if field not in preferences:
+            return JSONResponse({"error": "附件字段无效"}, status_code=400)
+        return {"enabled": preferences[field]}
+
+
+@router.put("/upload-preferences/{section}/{field}")
+async def write_upload_preference(request: Request, section: str, field: str):
+    require_session_user(request)
+    schema = layout_section(section)
+    try:
+        body = await request.json()
+        if not isinstance(body, dict) or set(body) != {"enabled"}:
+            raise ValueError("请求必须仅包含 enabled")
+        with write_lock, closing(connect()) as db:
+            user_id = active_session_user(request, db)["id"]
+            return save_upload_preference(db, schema, user_id, field, body["enabled"])
     except ValueError as error:
         return JSONResponse({"error": str(error)}, status_code=400)

@@ -20,6 +20,7 @@
 <h1>{{ pdf_text(basic.name or '个人简历') }}</h1>
 <p class="subtitle">个人简历{% if basic.title %} · {{ pdf_text(basic.title) }}{% endif %}{% if basic.employer %}<br>{{ pdf_text(basic.employer) }}{% endif %}</p>
 </td>{% if portrait %}<td class="portrait"><img src="portrait.png" width="{{ portrait.width }}" height="{{ portrait.height }}" alt="个人照片"></td>{% endif %}</tr></table>
+{% if basic.photo and basic.photo.lower().endswith('.zip') %}<p><span class="label">照片附件：</span>{{ pdf_text(basic.photo_name or '—') }}</p>{% endif %}
 <h2 id="section-basic">{{ basic_section.label }}</h2>
 {% for field in basic_section.fields %}{% if field.type != 'file' %}
 <p><span class="label">{{ field.label }}：</span>{{ pdf_text(format_value(field, basic)) }}</p>

@@ -1,5 +1,6 @@
 const panelLocks = new WeakMap();
 const panelMutations = new Map();
+const uploadPreferenceWrites = new Map();
 
 function status(node, message, error = false) {
   if (!node) return;
@@ -46,7 +47,7 @@ function syncControls(panel) {
     for (const control of editor.elements) control.disabled = busy;
     editor.setAttribute("aria-busy", String(busy));
     for (const authors of editor.querySelectorAll(".authors-editor")) syncAuthorControls(authors);
-    for (const zone of editor.querySelectorAll("[data-saved-ocr-url]")) syncSavedOcrControls(zone);
+    for (const zone of editor.querySelectorAll(".ocr-zone")) syncOcrControls(zone);
     const submit = editor.querySelector('button[type="submit"]');
     if (submit && editor._activeOcrZones?.size) submit.disabled = true;
   }
@@ -264,6 +265,80 @@ function applyOcrFields(form, fields, replacement = null) {
   return { filled, preserved };
 }
 
+function uploadPreferenceState(zone) {
+  return zone._uploadPreference || (zone._uploadPreference = { pending: false, failed: false });
+}
+
+function ocrPreferenceProblem(zone) {
+  const state = uploadPreferenceState(zone);
+  if (state.pending) return "识别偏好正在保存，暂不进行 AI 识别。";
+  if (state.failed) return "识别偏好尚未保存，请先重试保存偏好；当前文件仅上传保存。";
+  if (!zone.querySelector(".ocr-enabled").checked) return "AI 识别已关闭，当前文件仅上传保存。";
+  return "";
+}
+
+function isZipFile(file) {
+  return Boolean(file?.name.toLowerCase().endsWith(".zip"));
+}
+
+function syncOcrControls(zone) {
+  const busy = zone.closest(".tab-panel").dataset.busy === "true";
+  const state = uploadPreferenceState(zone);
+  zone.querySelector(".ocr-enabled").disabled = busy || state.pending;
+  zone.querySelector(".ocr-preference-retry").disabled = busy || state.pending;
+  const file = zone.querySelector('input[type="file"]').files[0];
+  zone.querySelector(".ocr-retry").disabled = busy || Boolean(ocrPreferenceProblem(zone))
+    || Boolean(zoneOcrState(zone).controller) || isZipFile(file);
+  syncSavedOcrControls(zone);
+}
+
+async function saveUploadPreference(zone) {
+  const state = uploadPreferenceState(zone);
+  if (state.pending) return;
+  const checkbox = zone.querySelector(".ocr-enabled");
+  const enabled = checkbox.checked;
+  const feedback = zone.querySelector(".ocr-preference-status");
+  const retry = zone.querySelector(".ocr-preference-retry");
+  stopZoneOcr(zone);
+  status(zone.querySelector(".ocr-status"), "");
+  state.pending = true;
+  state.failed = false;
+  retry.hidden = true;
+  status(feedback, "正在保存识别偏好…");
+  syncOcrControls(zone);
+  const pending = request(checkbox.dataset.preferenceUrl, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+    keepalive: true,
+  });
+  uploadPreferenceWrites.set(checkbox.dataset.preferenceUrl, pending);
+  try {
+    await pending;
+    status(feedback, enabled ? "已保存：AI 识别开启。" : "已保存：仅上传，不进行 AI 识别。");
+    const file = zone.querySelector('input[type="file"]').files[0];
+    const input = zone.querySelector('input[type="file"]');
+    const maxMb = Number(zone.closest("form.entry").dataset.maxUploadMb || 0);
+    zone.querySelector(".ocr-retry").hidden = !enabled || !file || isZipFile(file)
+      || Boolean(validateOcrFile(file, input, maxMb));
+    if (!zone.querySelector(".ocr-retry").hidden) {
+      zoneOcrState(zone).mode = "upload";
+      zone.querySelector(".ocr-retry").textContent = "识别所选文件";
+    }
+    if (isZipFile(file)) status(zone.querySelector(".ocr-status"), "ZIP 仅作为附件保存，不进行 AI 识别；请点击保存。");
+  } catch (error) {
+    state.failed = true;
+    status(feedback, `识别偏好保存失败：${error.message}。偏好尚未保存，AI 识别已暂停，请重试。`, true);
+    retry.hidden = false;
+  } finally {
+    if (uploadPreferenceWrites.get(checkbox.dataset.preferenceUrl) === pending) {
+      uploadPreferenceWrites.delete(checkbox.dataset.preferenceUrl);
+    }
+    state.pending = false;
+    if (zone.isConnected) syncOcrControls(zone);
+  }
+}
+
 function savedOcrProblem(zone) {
   if (zone.querySelector('input[type="file"]').files.length) {
     return "已选择新附件，请先清除所选文件以识别原 PDF；如需识别新文件，请使用上传自动识别，或保存新附件后再重新识别。";
@@ -277,7 +352,7 @@ function savedOcrProblem(zone) {
 function syncSavedOcrControls(zone) {
   const button = zone.querySelector(".ocr-saved");
   if (!button) return;
-  const problem = savedOcrProblem(zone);
+  const problem = ocrPreferenceProblem(zone) || savedOcrProblem(zone);
   const active = Boolean(zoneOcrState(zone).controller);
   button.disabled = active || Boolean(problem) || zone.closest(".tab-panel").dataset.busy === "true";
   const help = zone.querySelector(".saved-ocr-help");
@@ -288,7 +363,7 @@ function syncSavedOcrControls(zone) {
 
 async function triggerSavedOcr(panel, form, zone) {
   if (!zone.dataset.savedOcrUrl || panel.dataset.busy === "true" || zoneOcrState(zone).controller) return;
-  const problem = savedOcrProblem(zone);
+  const problem = ocrPreferenceProblem(zone) || savedOcrProblem(zone);
   if (problem) {
     status(zone.querySelector(".ocr-status"), problem, true);
     return;
@@ -312,7 +387,7 @@ function setOcrLock(form, zone, active) {
   else zones.delete(zone);
   const submit = form.querySelector('button[type="submit"]');
   if (submit) submit.disabled = zones.size > 0 || form.closest(".tab-panel").dataset.busy === "true";
-  syncSavedOcrControls(zone);
+  syncOcrControls(zone);
 }
 
 function stopZoneOcr(zone) {
@@ -383,11 +458,12 @@ async function readNdjson(response, onEvent) {
 }
 
 async function handleZoneFileSelected(panel, form, zone, file) {
-  if (zone.classList.contains("attachment-only")) {
-    const input = zone.querySelector('input[type="file"]');
-    const statusNode = zone.querySelector(".ocr-status");
-    const problem = validateOcrFile(file, input, Number(form.dataset.maxUploadMb || 0));
-    status(statusNode, problem || "已选择，保存时作为附件上传。", Boolean(problem));
+  zoneOcrState(zone).mode = "upload";
+  const input = zone.querySelector('input[type="file"]');
+  const problem = validateOcrFile(file, input, Number(form.dataset.maxUploadMb || 0));
+  if (problem || isZipFile(file) || ocrPreferenceProblem(zone)) {
+    status(zone.querySelector(".ocr-status"), problem
+      || (isZipFile(file) ? "ZIP 仅作为附件保存，不进行 AI 识别；请点击保存。" : ocrPreferenceProblem(zone)), Boolean(problem));
     return;
   }
   await triggerOcr(panel, form, zone, file);
@@ -405,6 +481,12 @@ async function triggerOcr(panel, form, zone, file) {
     status(statusNode, problem, true);
     return;
   }
+  if ((!saved && isZipFile(file)) || ocrPreferenceProblem(zone)) {
+    stopZoneOcr(zone);
+    status(statusNode, !saved && isZipFile(file)
+      ? "ZIP 仅作为附件保存，不进行 AI 识别；请点击保存。" : ocrPreferenceProblem(zone));
+    return;
+  }
   if (panel.dataset.busy === "true") return;
   if (!saved) form.dataset.dirty = "true";
   status(form.querySelector(".status"), saved ? "正在识别已保存附件，记录未更改" : "附件已选择，尚未保存");
@@ -415,7 +497,7 @@ async function triggerOcr(panel, form, zone, file) {
   state.controller = controller;
   state.mode = saved ? "saved" : "upload";
   const token = ++state.token;
-  const isCurrent = () => state.token === token;
+  const isCurrent = () => state.token === token && !ocrPreferenceProblem(zone);
   const replacement = saved ? ocrFieldSnapshot(form) : null;
 
   retryButton.hidden = true;
@@ -704,6 +786,8 @@ export function createEntryEditor(dialog, { onSaved }) {
     holder.setAttribute("aria-busy", "true");
     status(loadStatus, "正在加载编辑表单…");
     try {
+      await Promise.allSettled([...uploadPreferenceWrites.values()]);
+      if (token !== generation || !dialog.open) return false;
       const response = await request(url, { signal: controller.signal });
       const html = await response.text();
       if (token !== generation || !dialog.open) return false;
@@ -756,7 +840,7 @@ export function createEntryEditor(dialog, { onSaved }) {
 
   function markEdited(control) {
     const current = control.closest("form.entry");
-    if (!current || isBusy()) return;
+    if (!current || isBusy() || control.matches(".ocr-enabled")) return;
     const authors = control.closest(".authors-editor");
     if (authors) syncAuthors(authors, true);
     else if (control.matches(".dotted-date-display")) markControlEdited(editDottedDate(control));
@@ -777,6 +861,10 @@ export function createEntryEditor(dialog, { onSaved }) {
     const control = event.target;
     const current = control.closest("form.entry");
     if (!current || isBusy()) return;
+    if (control.matches(".ocr-enabled")) {
+      await saveUploadPreference(control.closest(".ocr-zone"));
+      return;
+    }
     markEdited(control);
     const savedZone = control.matches('input[name="remove_file"]')
       ? control.closest("[data-saved-ocr-url]") : null;
@@ -795,7 +883,7 @@ export function createEntryEditor(dialog, { onSaved }) {
     control.setCustomValidity(problem);
     if (problem) status(upload.querySelector(".upload-status"), problem, true);
     const zone = control.closest(".ocr-zone");
-    if (!zone) return; // A basic photo is uploaded without OCR.
+    if (!zone) return;
     stopZoneOcr(zone);
     syncSavedOcrControls(zone);
     if (file) await handleZoneFileSelected(panel, current, zone, file);
@@ -842,6 +930,10 @@ export function createEntryEditor(dialog, { onSaved }) {
       return;
     }
     if (isBusy()) return;
+    if (button.matches(".ocr-preference-retry")) {
+      await saveUploadPreference(button.closest(".ocr-zone"));
+      return;
+    }
     if (button.matches(".btn-clear-date")) {
       const wrapper = button.closest(".dotted-date");
       const control = wrapper.querySelector(".dotted-date-native");

@@ -1,6 +1,7 @@
 from pathlib import Path
 import shutil
 import tempfile
+from zipfile import BadZipFile, ZipFile
 
 from PIL import Image
 from starlette.datastructures import UploadFile
@@ -29,6 +30,16 @@ def validate_upload(field: Field, upload: UploadFile) -> str:
         upload.file.seek(0)
         if not prefix.startswith(b"%PDF"):
             raise ValueError(f"{field.label}：文件内容不是 PDF，请重新导出后上传")
+        return extension
+    if extension == ".zip":
+        try:
+            # Check the archive directory only; never extract or inflate members.
+            with ZipFile(upload.file) as archive:
+                archive.infolist()
+        except (BadZipFile, OSError, ValueError) as error:
+            raise ValueError(f"{field.label}：文件内容不是有效的 ZIP 压缩文档") from error
+        finally:
+            upload.file.seek(0)
         return extension
     try:
         with Image.open(upload.file, formats=tuple(IMAGE_EXTENSIONS)) as image:
@@ -95,7 +106,7 @@ def save_upload(username: str, section: str, entry_id: int, field: Field,
         directory = entry_directory(username, section, entry_id)
         if not any(item.key == field.key and item.type == "file" for item in SECTIONS[section].fields):
             raise ValueError("文件字段无效")
-        if extension not in {".pdf", ".jpg", ".jpeg", ".png"} or extension not in field.accept.split(","):
+        if extension not in {".pdf", ".jpg", ".jpeg", ".png", ".zip"} or extension not in field.accept.split(","):
             raise ValueError("文件扩展名无效")
         destination = upload_path(username, f"{section}/{entry_id}/{field.key}{extension}")
         directory.mkdir(parents=True, exist_ok=True)

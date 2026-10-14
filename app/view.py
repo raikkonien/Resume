@@ -64,7 +64,9 @@ def export_resume(request: Request):
                 raise HTTPException(401, "请重新登录后导出")
             basic = get_basic(db, user["id"])
             rows = {section.key: list_rows(db, section, user["id"]) for section in ENTRY_SECTIONS}
-            photo = base64.b64encode(upload_path(user["username"], basic["photo"]).read_bytes()).decode("ascii") if basic["photo"] else None
+            photo = None
+            if basic["photo"] and not basic["photo"].lower().endswith(".zip"):
+                photo = base64.b64encode(upload_path(user["username"], basic["photo"]).read_bytes()).decode("ascii")
         snapshot = json.dumps({"basic": basic, "rows": rows, "photo": photo}, ensure_ascii=False).encode("utf-8")
         result = subprocess.run(
             [sys.executable, "-m", "app.pdf_export"], input=snapshot,
