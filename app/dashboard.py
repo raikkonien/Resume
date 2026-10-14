@@ -22,6 +22,7 @@ _ORGANIZATION_FIELDS = {
     "education": "school",
     "projects": "funder",
     "books": "publisher",
+    "honors": "issuer",
     "trainings": "organizer",
     "conferences": "organizer",
     "licenses": "issuer",

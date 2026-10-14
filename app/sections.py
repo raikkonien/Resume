@@ -90,7 +90,7 @@ ENTRY_SECTIONS = (
     Section("appointments", "党政职务", (
         Field("department", "任职部门", "text"),
         Field("status", "当前任职状况", "select", ("在任", "不在任")),
-        Field("name", "职务名称", "select", ("科长", "副科长")),
+        Field("name", "职务名称", "select", ("科长", "副科长", "部长", "副部长")),
         Field("level", "职务级别", "select", ("正科级", "副科级", "正处级", "副处级")),
         Field("begin_date", "任现职时间", "date", date_format="YYYY.MM.DD"),
         Field("end_date", "免职日期", "date", date_format="YYYY.MM.DD"),
@@ -206,6 +206,14 @@ ENTRY_SECTIONS = (
         Field("end_month", "聘期结束", "month"),
         Field("certificate", "证书", "file", accept=ATTACHMENT),
     ), title_field="society", year_fields=("begin_month",)),
+    Section("honors", "荣誉", (
+        Field("issuer", "荣誉颁发单位", "text"),
+        Field("name", "荣誉名称", "text"),
+        Field("level", "荣誉等级", "text"),
+        Field("year", "荣誉取得年份", "year"),
+        Field("ownership", "荣誉归属", "text"),
+        Field("certificate", "荣誉证书", "file", accept=ATTACHMENT),
+    ), title_field="name", year_fields=("year",)),
     Section("standards", "团体/行业标准", (
         Field("name", "标准名称", "text"),
         Field("category", "标准类别", "select", ("团体标准", "行业标准")),
